@@ -75,3 +75,16 @@ func TestValidateRejectsUnsupportedEnv(t *testing.T) {
 		t.Fatal("Validate() error = nil, want error")
 	}
 }
+
+func TestLoadRejectsInvalidDuration(t *testing.T) {
+	t.Setenv("APP_NAME", "")
+	t.Setenv("APP_ENV", "")
+	t.Setenv("HTTP_ADDR", "")
+	t.Setenv("HTTP_READ_TIMEOUT", "soon")
+	t.Setenv("HTTP_WRITE_TIMEOUT", "")
+	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+}

@@ -28,14 +28,27 @@ type HTTPConfig struct {
 }
 
 func Load() (Config, error) {
+	readTimeout, err := getDurationEnv("HTTP_READ_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	writeTimeout, err := getDurationEnv("HTTP_WRITE_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	shutdownTimeout, err := getDurationEnv("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		AppName: getEnv("APP_NAME", "talentpage-api"),
 		Env:     getEnv("APP_ENV", EnvDevelopment),
 		HTTP: HTTPConfig{
 			Addr:            getEnv("HTTP_ADDR", ":8080"),
-			ReadTimeout:     getDurationEnv("HTTP_READ_TIMEOUT", 5*time.Second),
-			WriteTimeout:    getDurationEnv("HTTP_WRITE_TIMEOUT", 10*time.Second),
-			ShutdownTimeout: getDurationEnv("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+			ReadTimeout:     readTimeout,
+			WriteTimeout:    writeTimeout,
+			ShutdownTimeout: shutdownTimeout,
 		},
 	}
 
@@ -82,15 +95,15 @@ func getEnv(key, fallback string) string {
 	return value
 }
 
-func getDurationEnv(key string, fallback time.Duration) time.Duration {
+func getDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
 	value := os.Getenv(key)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 
 	duration, err := time.ParseDuration(value)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("parse %s: %w", key, err)
 	}
-	return duration
+	return duration, nil
 }
