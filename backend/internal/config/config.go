@@ -20,6 +20,7 @@ type Config struct {
 	Env      string
 	HTTP     HTTPConfig
 	Database DatabaseConfig
+	Auth     AuthConfig
 	Redis    RedisConfig
 	Storage  StorageConfig
 	AI       AIConfig
@@ -33,7 +34,17 @@ type HTTPConfig struct {
 }
 
 type DatabaseConfig struct {
-	DSN string
+	DSN             string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
+type AuthConfig struct {
+	CodeTTL    time.Duration
+	SessionTTL time.Duration
+	CookieName string
 }
 
 type RedisConfig struct {
@@ -73,6 +84,30 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	dbConnMaxLifetime, err := getDurationEnv("DATABASE_CONN_MAX_LIFETIME", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	dbConnMaxIdleTime, err := getDurationEnv("DATABASE_CONN_MAX_IDLE_TIME", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	dbMaxOpenConns, err := getIntEnv("DATABASE_MAX_OPEN_CONNS", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	dbMaxIdleConns, err := getIntEnv("DATABASE_MAX_IDLE_CONNS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	authCodeTTL, err := getDurationEnv("AUTH_CODE_TTL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	authSessionTTL, err := getDurationEnv("AUTH_SESSION_TTL", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 	aiTimeout, err := getDurationEnv("AI_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -100,7 +135,16 @@ func Load() (Config, error) {
 			ShutdownTimeout: shutdownTimeout,
 		},
 		Database: DatabaseConfig{
-			DSN: getEnv("DATABASE_DSN", ""),
+			DSN:             getEnv("DATABASE_DSN", ""),
+			MaxOpenConns:    dbMaxOpenConns,
+			MaxIdleConns:    dbMaxIdleConns,
+			ConnMaxLifetime: dbConnMaxLifetime,
+			ConnMaxIdleTime: dbConnMaxIdleTime,
+		},
+		Auth: AuthConfig{
+			CodeTTL:    authCodeTTL,
+			SessionTTL: authSessionTTL,
+			CookieName: getEnv("AUTH_COOKIE_NAME", "talentpage_session"),
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("REDIS_ADDR", "127.0.0.1:6379"),
@@ -146,6 +190,30 @@ func (c Config) Validate() error {
 	}
 	if c.HTTP.ShutdownTimeout <= 0 {
 		return errors.New("http shutdown timeout must be positive")
+	}
+	if c.Database.MaxOpenConns <= 0 {
+		return errors.New("database max open conns must be positive")
+	}
+	if c.Database.MaxIdleConns < 0 {
+		return errors.New("database max idle conns must not be negative")
+	}
+	if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		return errors.New("database max idle conns must not exceed max open conns")
+	}
+	if c.Database.ConnMaxLifetime <= 0 {
+		return errors.New("database conn max lifetime must be positive")
+	}
+	if c.Database.ConnMaxIdleTime <= 0 {
+		return errors.New("database conn max idle time must be positive")
+	}
+	if c.Auth.CodeTTL <= 0 {
+		return errors.New("auth code ttl must be positive")
+	}
+	if c.Auth.SessionTTL <= 0 {
+		return errors.New("auth session ttl must be positive")
+	}
+	if c.Auth.CookieName == "" {
+		return errors.New("auth cookie name is required")
 	}
 	if c.Redis.Addr == "" {
 		return errors.New("redis addr is required")
