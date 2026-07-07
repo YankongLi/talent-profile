@@ -1,0 +1,75 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Frontend / Node.js
+node_modules/
+dist/
+build/
+.nuxt/
+.next/
+.output/
+.cache/
+*.local
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE - JetBrains / IntelliJ / GoLand
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+logs/
+
+# IDE - VSCode
+.vscode/
+*.code-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# Coverage & test output
+coverage/
+*.cover
+*.prof
+htmlcov/
+
+# Binary output
+bin/
+tmp/
+
+backend/config.yaml
+backend/.gocache/
+.gocache/
