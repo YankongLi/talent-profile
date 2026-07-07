@@ -17,6 +17,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("DATABASE_MAX_IDLE_CONNS", "")
 	t.Setenv("DATABASE_CONN_MAX_LIFETIME", "")
 	t.Setenv("DATABASE_CONN_MAX_IDLE_TIME", "")
+	t.Setenv("AUTH_CODE_TTL", "")
+	t.Setenv("AUTH_SESSION_TTL", "")
+	t.Setenv("AUTH_COOKIE_NAME", "")
 	t.Setenv("REDIS_ADDR", "")
 	t.Setenv("REDIS_PASSWORD", "")
 	t.Setenv("REDIS_DB", "")
@@ -62,6 +65,15 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.Database.ConnMaxIdleTime != 5*time.Minute {
 		t.Fatalf("Database.ConnMaxIdleTime = %s, want 5m", cfg.Database.ConnMaxIdleTime)
 	}
+	if cfg.Auth.CodeTTL != 10*time.Minute {
+		t.Fatalf("Auth.CodeTTL = %s, want 10m", cfg.Auth.CodeTTL)
+	}
+	if cfg.Auth.SessionTTL != 30*24*time.Hour {
+		t.Fatalf("Auth.SessionTTL = %s, want 720h", cfg.Auth.SessionTTL)
+	}
+	if cfg.Auth.CookieName != "talentpage_session" {
+		t.Fatalf("Auth.CookieName = %q, want talentpage_session", cfg.Auth.CookieName)
+	}
 	if cfg.Redis.Addr != "127.0.0.1:6379" {
 		t.Fatalf("Redis.Addr = %q, want 127.0.0.1:6379", cfg.Redis.Addr)
 	}
@@ -88,6 +100,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("DATABASE_MAX_IDLE_CONNS", "8")
 	t.Setenv("DATABASE_CONN_MAX_LIFETIME", "45m")
 	t.Setenv("DATABASE_CONN_MAX_IDLE_TIME", "6m")
+	t.Setenv("AUTH_CODE_TTL", "2m")
+	t.Setenv("AUTH_SESSION_TTL", "24h")
+	t.Setenv("AUTH_COOKIE_NAME", "tp_session")
 	t.Setenv("REDIS_ADDR", "localhost:6380")
 	t.Setenv("REDIS_PASSWORD", "redis-secret")
 	t.Setenv("REDIS_DB", "2")
@@ -135,6 +150,15 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if cfg.Database.ConnMaxIdleTime != 6*time.Minute {
 		t.Fatalf("Database.ConnMaxIdleTime = %s", cfg.Database.ConnMaxIdleTime)
+	}
+	if cfg.Auth.CodeTTL != 2*time.Minute {
+		t.Fatalf("Auth.CodeTTL = %s", cfg.Auth.CodeTTL)
+	}
+	if cfg.Auth.SessionTTL != 24*time.Hour {
+		t.Fatalf("Auth.SessionTTL = %s", cfg.Auth.SessionTTL)
+	}
+	if cfg.Auth.CookieName != "tp_session" {
+		t.Fatalf("Auth.CookieName = %q", cfg.Auth.CookieName)
 	}
 	if cfg.Redis.DB != 2 {
 		t.Fatalf("Redis.DB = %d", cfg.Redis.DB)
@@ -204,6 +228,11 @@ func TestValidateRejectsInvalidDatabasePool(t *testing.T) {
 			ConnMaxLifetime: time.Minute,
 			ConnMaxIdleTime: time.Minute,
 		},
+		Auth: AuthConfig{
+			CodeTTL:    time.Minute,
+			SessionTTL: time.Hour,
+			CookieName: "talentpage_session",
+		},
 		Redis: RedisConfig{
 			Addr: "127.0.0.1:6379",
 		},
@@ -251,6 +280,77 @@ func TestValidateRejectsInvalidDatabasePool(t *testing.T) {
 			name: "conn max idle time",
 			mutate: func(cfg *Config) {
 				cfg.Database.ConnMaxIdleTime = 0
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			tt.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidAuthConfig(t *testing.T) {
+	base := Config{
+		AppName: "talentpage-api",
+		Env:     EnvTest,
+		HTTP: HTTPConfig{
+			Addr:            ":8080",
+			ReadTimeout:     time.Second,
+			WriteTimeout:    time.Second,
+			ShutdownTimeout: time.Second,
+		},
+		Database: DatabaseConfig{
+			MaxOpenConns:    10,
+			MaxIdleConns:    5,
+			ConnMaxLifetime: time.Minute,
+			ConnMaxIdleTime: time.Minute,
+		},
+		Auth: AuthConfig{
+			CodeTTL:    time.Minute,
+			SessionTTL: time.Hour,
+			CookieName: "talentpage_session",
+		},
+		Redis: RedisConfig{
+			Addr: "127.0.0.1:6379",
+		},
+		Storage: StorageConfig{
+			Endpoint: "127.0.0.1:9000",
+			Bucket:   "talentpage-private",
+		},
+		AI: AIConfig{
+			Provider:      "deepseek",
+			Model:         "deepseek-chat",
+			PromptVersion: "profile-v1",
+			Timeout:       time.Second,
+		},
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "code ttl",
+			mutate: func(cfg *Config) {
+				cfg.Auth.CodeTTL = 0
+			},
+		},
+		{
+			name: "session ttl",
+			mutate: func(cfg *Config) {
+				cfg.Auth.SessionTTL = 0
+			},
+		},
+		{
+			name: "cookie name",
+			mutate: func(cfg *Config) {
+				cfg.Auth.CookieName = ""
 			},
 		},
 	}

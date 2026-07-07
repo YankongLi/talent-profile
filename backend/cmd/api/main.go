@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -24,11 +25,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	var db *sql.DB
 	if cfg.Database.DSN == "" {
 		logger.Warn("database dsn is empty; database connection disabled")
 	} else {
 		dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		db, err := database.Open(dbCtx, cfg.Database)
+		db, err = database.Open(dbCtx, cfg.Database)
 		cancel()
 		if err != nil {
 			logger.Error("connect database failed", "error", err)
@@ -38,7 +40,11 @@ func main() {
 		logger.Info("database connected")
 	}
 
-	server := httpapi.NewServer(cfg)
+	routerOptions := []httpapi.RouterOption{httpapi.WithLogger(logger)}
+	if db != nil {
+		routerOptions = append(routerOptions, httpapi.WithDatabase(db))
+	}
+	server := httpapi.NewServer(cfg, routerOptions...)
 	errCh := make(chan error, 1)
 
 	go func() {

@@ -193,5 +193,10 @@ func testConfig() config.Config {
 			WriteTimeout:    time.Second,
 			ShutdownTimeout: time.Second,
 		},
+		Auth: config.AuthConfig{
+			CodeTTL:    time.Minute,
+			SessionTTL: time.Hour,
+			CookieName: "talentpage_session",
+		},
 	}
 }

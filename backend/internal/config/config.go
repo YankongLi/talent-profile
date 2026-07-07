@@ -20,6 +20,7 @@ type Config struct {
 	Env      string
 	HTTP     HTTPConfig
 	Database DatabaseConfig
+	Auth     AuthConfig
 	Redis    RedisConfig
 	Storage  StorageConfig
 	AI       AIConfig
@@ -38,6 +39,12 @@ type DatabaseConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+}
+
+type AuthConfig struct {
+	CodeTTL    time.Duration
+	SessionTTL time.Duration
+	CookieName string
 }
 
 type RedisConfig struct {
@@ -93,6 +100,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	authCodeTTL, err := getDurationEnv("AUTH_CODE_TTL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	authSessionTTL, err := getDurationEnv("AUTH_SESSION_TTL", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 	aiTimeout, err := getDurationEnv("AI_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -125,6 +140,11 @@ func Load() (Config, error) {
 			MaxIdleConns:    dbMaxIdleConns,
 			ConnMaxLifetime: dbConnMaxLifetime,
 			ConnMaxIdleTime: dbConnMaxIdleTime,
+		},
+		Auth: AuthConfig{
+			CodeTTL:    authCodeTTL,
+			SessionTTL: authSessionTTL,
+			CookieName: getEnv("AUTH_COOKIE_NAME", "talentpage_session"),
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("REDIS_ADDR", "127.0.0.1:6379"),
@@ -185,6 +205,15 @@ func (c Config) Validate() error {
 	}
 	if c.Database.ConnMaxIdleTime <= 0 {
 		return errors.New("database conn max idle time must be positive")
+	}
+	if c.Auth.CodeTTL <= 0 {
+		return errors.New("auth code ttl must be positive")
+	}
+	if c.Auth.SessionTTL <= 0 {
+		return errors.New("auth session ttl must be positive")
+	}
+	if c.Auth.CookieName == "" {
+		return errors.New("auth cookie name is required")
 	}
 	if c.Redis.Addr == "" {
 		return errors.New("redis addr is required")

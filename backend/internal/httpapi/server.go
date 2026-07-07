@@ -1,26 +1,75 @@
 package httpapi
 
 import (
+	"database/sql"
+	"log/slog"
 	"net/http"
 
+	"github.com/YankongLi/talent-profile/backend/internal/auth"
 	"github.com/YankongLi/talent-profile/backend/internal/config"
 	"github.com/gin-gonic/gin"
 )
 
-func NewServer(cfg config.Config) *http.Server {
+type RouterOption func(*routerOptions)
+
+type routerOptions struct {
+	db          *sql.DB
+	authService *auth.Service
+	logger      *slog.Logger
+}
+
+func WithDatabase(db *sql.DB) RouterOption {
+	return func(opts *routerOptions) {
+		opts.db = db
+	}
+}
+
+func WithAuthService(service *auth.Service) RouterOption {
+	return func(opts *routerOptions) {
+		opts.authService = service
+	}
+}
+
+func WithLogger(logger *slog.Logger) RouterOption {
+	return func(opts *routerOptions) {
+		opts.logger = logger
+	}
+}
+
+func NewServer(cfg config.Config, options ...RouterOption) *http.Server {
 	return &http.Server{
 		Addr:         cfg.HTTP.Addr,
-		Handler:      NewRouter(cfg),
+		Handler:      NewRouter(cfg, options...),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
 }
 
-func NewRouter(cfg config.Config) *gin.Engine {
+func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
 		gin.SetMode(gin.TestMode)
+	}
+
+	opts := routerOptions{}
+	for _, apply := range options {
+		apply(&opts)
+	}
+	authService := opts.authService
+	if authService == nil && opts.db != nil {
+		authService = auth.NewService(
+			auth.NewPostgresStore(opts.db),
+			auth.LogEmailCodeSender{
+				Logger:      opts.logger,
+				IncludeCode: !cfg.IsProduction(),
+			},
+			auth.Config{
+				CodeTTL:         cfg.Auth.CodeTTL,
+				SessionTTL:      cfg.Auth.SessionTTL,
+				ExposeDebugCode: !cfg.IsProduction(),
+			},
+		)
 	}
 
 	router := gin.New()
@@ -45,7 +94,7 @@ func NewRouter(cfg config.Config) *gin.Engine {
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", healthHandler(cfg.AppName, cfg.Env))
-	registerV1Routes(v1)
+	registerV1Routes(v1, newAuthHandler(cfg, authService))
 
 	return router
 }
