@@ -17,7 +17,8 @@ type profileHandler struct {
 }
 
 type profileResponse struct {
-	Profile profiledomain.Profile `json:"profile"`
+	Profile  profiledomain.Profile   `json:"profile"`
+	Sections []profiledomain.Section `json:"sections"`
 }
 
 type updateProfileRequest struct {
@@ -27,6 +28,26 @@ type updateProfileRequest struct {
 	Visibility  *string         `json:"visibility"`
 	TemplateID  *string         `json:"template_id"`
 	Theme       *map[string]any `json:"theme"`
+}
+
+type createSectionRequest struct {
+	SectionType     string         `json:"section_type"`
+	Content         map[string]any `json:"content"`
+	SortOrder       *int           `json:"sort_order"`
+	IsVisible       *bool          `json:"is_visible"`
+	IsUserConfirmed *bool          `json:"is_user_confirmed"`
+}
+
+type updateSectionRequest struct {
+	SectionType     *string         `json:"section_type"`
+	Content         *map[string]any `json:"content"`
+	SortOrder       *int            `json:"sort_order"`
+	IsVisible       *bool           `json:"is_visible"`
+	IsUserConfirmed *bool           `json:"is_user_confirmed"`
+}
+
+type sectionResponse struct {
+	Section profiledomain.Section `json:"section"`
 }
 
 func newProfileHandler(cfg config.Config, authService *authdomain.Service, profileService *profiledomain.Service) *profileHandler {
@@ -51,8 +72,13 @@ func (h *profileHandler) get(c *gin.Context) {
 		h.abortProfileError(c, err)
 		return
 	}
+	sections, err := h.profileService.Sections(c.Request.Context(), user.ID)
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
 
-	c.JSON(http.StatusOK, profileResponse{Profile: profile})
+	c.JSON(http.StatusOK, profileResponse{Profile: profile, Sections: sections})
 }
 
 func (h *profileHandler) patch(c *gin.Context) {
@@ -79,8 +105,81 @@ func (h *profileHandler) patch(c *gin.Context) {
 		h.abortProfileError(c, err)
 		return
 	}
+	sections, err := h.profileService.Sections(c.Request.Context(), user.ID)
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
 
-	c.JSON(http.StatusOK, profileResponse{Profile: profile})
+	c.JSON(http.StatusOK, profileResponse{Profile: profile, Sections: sections})
+}
+
+func (h *profileHandler) createSection(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	var req createSectionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	section, err := h.profileService.CreateSection(c.Request.Context(), user.ID, profiledomain.CreateSectionInput{
+		SectionType:     req.SectionType,
+		Content:         req.Content,
+		SortOrder:       req.SortOrder,
+		IsVisible:       req.IsVisible,
+		IsUserConfirmed: req.IsUserConfirmed,
+	})
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, sectionResponse{Section: section})
+}
+
+func (h *profileHandler) patchSection(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	var req updateSectionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	section, err := h.profileService.UpdateSection(c.Request.Context(), user.ID, c.Param("id"), profiledomain.UpdateSectionInput{
+		SectionType:     req.SectionType,
+		Content:         req.Content,
+		SortOrder:       req.SortOrder,
+		IsVisible:       req.IsVisible,
+		IsUserConfirmed: req.IsUserConfirmed,
+	})
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, sectionResponse{Section: section})
+}
+
+func (h *profileHandler) deleteSection(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	if err := h.profileService.DeleteSection(c.Request.Context(), user.ID, c.Param("id")); err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, okResponse{OK: true})
 }
 
 func (h *profileHandler) currentUser(c *gin.Context) (authdomain.User, bool) {
@@ -105,7 +204,10 @@ func (h *profileHandler) abortProfileError(c *gin.Context, err error) {
 		errors.Is(err, profiledomain.ErrInvalidTargetRole),
 		errors.Is(err, profiledomain.ErrInvalidVisibility),
 		errors.Is(err, profiledomain.ErrInvalidTemplateID),
-		errors.Is(err, profiledomain.ErrInvalidTheme):
+		errors.Is(err, profiledomain.ErrInvalidTheme),
+		errors.Is(err, profiledomain.ErrInvalidSectionID),
+		errors.Is(err, profiledomain.ErrInvalidSection),
+		errors.Is(err, profiledomain.ErrInvalidSortOrder):
 		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid profile")
 	case errors.Is(err, profiledomain.ErrNotFound):
 		AbortWithError(c, http.StatusNotFound, ErrCodeNotFound, "profile not found")

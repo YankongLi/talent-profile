@@ -82,7 +82,137 @@ func (s *PostgresStore) UpdateByUserID(ctx context.Context, userID string, input
 	))
 }
 
+func (s *PostgresStore) ListSectionsByUserID(ctx context.Context, userID string) ([]Section, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ps.id::text, ps.profile_id::text, ps.section_type, ps.content_json,
+			ps.sort_order, ps.is_visible, ps.is_user_confirmed, ps.created_at, ps.updated_at
+		FROM profile_sections ps
+		JOIN profiles p ON p.id = ps.profile_id
+		WHERE p.user_id = $1
+		ORDER BY ps.sort_order ASC, ps.created_at ASC, ps.id ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sections := []Section{}
+	for rows.Next() {
+		section, err := scanSection(rows)
+		if err != nil {
+			return nil, err
+		}
+		sections = append(sections, section)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return sections, nil
+}
+
+func (s *PostgresStore) CreateSection(ctx context.Context, profileID string, input CreateSectionInput) (Section, error) {
+	sortOrder := 0
+	if input.SortOrder != nil {
+		sortOrder = *input.SortOrder
+	}
+	isVisible := true
+	if input.IsVisible != nil {
+		isVisible = *input.IsVisible
+	}
+	isUserConfirmed := false
+	if input.IsUserConfirmed != nil {
+		isUserConfirmed = *input.IsUserConfirmed
+	}
+	contentJSON, err := json.Marshal(input.Content)
+	if err != nil {
+		return Section{}, err
+	}
+
+	return scanSection(s.db.QueryRowContext(ctx, `
+		INSERT INTO profile_sections (
+			profile_id, section_type, content_json, sort_order, is_visible, is_user_confirmed
+		)
+		VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+		RETURNING id::text, profile_id::text, section_type, content_json,
+			sort_order, is_visible, is_user_confirmed, created_at, updated_at
+	`, profileID, input.SectionType, string(contentJSON), sortOrder, isVisible, isUserConfirmed))
+}
+
+func (s *PostgresStore) GetSectionByUserID(ctx context.Context, userID string, sectionID string) (Section, error) {
+	return scanSection(s.db.QueryRowContext(ctx, `
+		SELECT ps.id::text, ps.profile_id::text, ps.section_type, ps.content_json,
+			ps.sort_order, ps.is_visible, ps.is_user_confirmed, ps.created_at, ps.updated_at
+		FROM profile_sections ps
+		JOIN profiles p ON p.id = ps.profile_id
+		WHERE p.user_id = $1
+			AND ps.id = $2
+	`, userID, sectionID))
+}
+
+func (s *PostgresStore) UpdateSectionByUserID(ctx context.Context, userID string, sectionID string, input UpdateSectionInput) (Section, error) {
+	sectionTypeSet, sectionType := stringValue(input.SectionType)
+	sortOrderSet, sortOrder := intValue(input.SortOrder)
+	isVisibleSet, isVisible := boolValue(input.IsVisible)
+	isUserConfirmedSet, isUserConfirmed := boolValue(input.IsUserConfirmed)
+
+	contentSet := input.Content != nil
+	contentJSON := "{}"
+	if input.Content != nil {
+		encoded, err := json.Marshal(input.Content)
+		if err != nil {
+			return Section{}, err
+		}
+		contentJSON = string(encoded)
+	}
+
+	return scanSection(s.db.QueryRowContext(ctx, `
+		UPDATE profile_sections ps
+		SET section_type = CASE WHEN $3 THEN $4 ELSE ps.section_type END,
+			content_json = CASE WHEN $5 THEN $6::jsonb ELSE ps.content_json END,
+			sort_order = CASE WHEN $7 THEN $8 ELSE ps.sort_order END,
+			is_visible = CASE WHEN $9 THEN $10 ELSE ps.is_visible END,
+			is_user_confirmed = CASE WHEN $11 THEN $12 ELSE ps.is_user_confirmed END
+		FROM profiles p
+		WHERE p.id = ps.profile_id
+			AND p.user_id = $1
+			AND ps.id = $2
+		RETURNING ps.id::text, ps.profile_id::text, ps.section_type, ps.content_json,
+			ps.sort_order, ps.is_visible, ps.is_user_confirmed, ps.created_at, ps.updated_at
+	`, userID, sectionID,
+		sectionTypeSet, sectionType,
+		contentSet, contentJSON,
+		sortOrderSet, sortOrder,
+		isVisibleSet, isVisible,
+		isUserConfirmedSet, isUserConfirmed,
+	))
+}
+
+func (s *PostgresStore) DeleteSectionByUserID(ctx context.Context, userID string, sectionID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM profile_sections ps
+		USING profiles p
+		WHERE p.id = ps.profile_id
+			AND p.user_id = $1
+			AND ps.id = $2
+	`, userID, sectionID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 type profileRow interface {
+	Scan(dest ...any) error
+}
+
+type sectionRow interface {
 	Scan(dest ...any) error
 }
 
@@ -129,9 +259,53 @@ func (s *PostgresStore) scanProfile(row profileRow) (Profile, error) {
 	return profile, nil
 }
 
+func scanSection(row sectionRow) (Section, error) {
+	var section Section
+	var contentJSON []byte
+
+	err := row.Scan(
+		&section.ID,
+		&section.ProfileID,
+		&section.SectionType,
+		&contentJSON,
+		&section.SortOrder,
+		&section.IsVisible,
+		&section.IsUserConfirmed,
+		&section.CreatedAt,
+		&section.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Section{}, ErrNotFound
+	}
+	if err != nil {
+		return Section{}, err
+	}
+	if err := json.Unmarshal(contentJSON, &section.Content); err != nil {
+		return Section{}, err
+	}
+	if section.Content == nil {
+		section.Content = map[string]any{}
+	}
+	return section, nil
+}
+
 func stringValue(value *string) (bool, string) {
 	if value == nil {
 		return false, ""
+	}
+	return true, *value
+}
+
+func intValue(value *int) (bool, int) {
+	if value == nil {
+		return false, 0
+	}
+	return true, *value
+}
+
+func boolValue(value *bool) (bool, bool) {
+	if value == nil {
+		return false, false
 	}
 	return true, *value
 }

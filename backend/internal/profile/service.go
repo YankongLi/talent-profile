@@ -13,13 +13,17 @@ const (
 	VisibilityUnlisted = "unlisted"
 	VisibilityPublic   = "public"
 
-	defaultTemplateID = "default"
-	maxHeadlineLength = 160
-	maxSummaryLength  = 2000
-	maxRoleCount      = 20
-	maxRoleLength     = 80
-	maxTemplateLength = 80
-	maxThemeBytes     = 20 * 1024
+	defaultTemplateID      = "default"
+	maxHeadlineLength      = 160
+	maxSummaryLength       = 2000
+	maxRoleCount           = 20
+	maxRoleLength          = 80
+	maxTemplateLength      = 80
+	maxThemeBytes          = 20 * 1024
+	maxSectionIDLength     = 120
+	maxSectionTypeLength   = 80
+	maxSectionContentBytes = 64 * 1024
+	maxSortOrder           = 100_000
 )
 
 var (
@@ -30,12 +34,20 @@ var (
 	ErrInvalidVisibility = errors.New("invalid visibility")
 	ErrInvalidTemplateID = errors.New("invalid template id")
 	ErrInvalidTheme      = errors.New("invalid theme")
+	ErrInvalidSectionID  = errors.New("invalid section id")
+	ErrInvalidSection    = errors.New("invalid section")
+	ErrInvalidSortOrder  = errors.New("invalid sort order")
 )
 
 type Store interface {
 	GetByUserID(ctx context.Context, userID string) (Profile, error)
 	EnsureDefaultByUserID(ctx context.Context, userID string) (Profile, error)
 	UpdateByUserID(ctx context.Context, userID string, input UpdateInput) (Profile, error)
+	ListSectionsByUserID(ctx context.Context, userID string) ([]Section, error)
+	CreateSection(ctx context.Context, profileID string, input CreateSectionInput) (Section, error)
+	GetSectionByUserID(ctx context.Context, userID string, sectionID string) (Section, error)
+	UpdateSectionByUserID(ctx context.Context, userID string, sectionID string, input UpdateSectionInput) (Section, error)
+	DeleteSectionByUserID(ctx context.Context, userID string, sectionID string) error
 }
 
 type Service struct {
@@ -65,6 +77,34 @@ type UpdateInput struct {
 	Theme       *map[string]any
 }
 
+type Section struct {
+	ID              string         `json:"id"`
+	ProfileID       string         `json:"profile_id"`
+	SectionType     string         `json:"section_type"`
+	Content         map[string]any `json:"content"`
+	SortOrder       int            `json:"sort_order"`
+	IsVisible       bool           `json:"is_visible"`
+	IsUserConfirmed bool           `json:"is_user_confirmed"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
+type CreateSectionInput struct {
+	SectionType     string
+	Content         map[string]any
+	SortOrder       *int
+	IsVisible       *bool
+	IsUserConfirmed *bool
+}
+
+type UpdateSectionInput struct {
+	SectionType     *string
+	Content         *map[string]any
+	SortOrder       *int
+	IsVisible       *bool
+	IsUserConfirmed *bool
+}
+
 func NewService(store Store) *Service {
 	return &Service{store: store}
 }
@@ -92,6 +132,44 @@ func (s *Service) Update(ctx context.Context, userID string, input UpdateInput) 
 		return Profile{}, err
 	}
 	return s.store.UpdateByUserID(ctx, userID, input)
+}
+
+func (s *Service) Sections(ctx context.Context, userID string) ([]Section, error) {
+	if _, err := s.Get(ctx, userID); err != nil {
+		return nil, err
+	}
+	return s.store.ListSectionsByUserID(ctx, userID)
+}
+
+func (s *Service) CreateSection(ctx context.Context, userID string, input CreateSectionInput) (Section, error) {
+	if err := validateCreateSection(&input); err != nil {
+		return Section{}, err
+	}
+	profile, err := s.Get(ctx, userID)
+	if err != nil {
+		return Section{}, err
+	}
+	return s.store.CreateSection(ctx, profile.ID, input)
+}
+
+func (s *Service) UpdateSection(ctx context.Context, userID string, sectionID string, input UpdateSectionInput) (Section, error) {
+	if err := validateSectionID(sectionID); err != nil {
+		return Section{}, err
+	}
+	if err := validateUpdateSection(input); err != nil {
+		return Section{}, err
+	}
+	if !input.hasChanges() {
+		return s.store.GetSectionByUserID(ctx, userID, sectionID)
+	}
+	return s.store.UpdateSectionByUserID(ctx, userID, sectionID, input)
+}
+
+func (s *Service) DeleteSection(ctx context.Context, userID string, sectionID string) error {
+	if err := validateSectionID(sectionID); err != nil {
+		return err
+	}
+	return s.store.DeleteSectionByUserID(ctx, userID, sectionID)
 }
 
 func validateUpdate(input UpdateInput) error {
@@ -144,6 +222,69 @@ func validateUpdate(input UpdateInput) error {
 	return nil
 }
 
+func validateCreateSection(input *CreateSectionInput) error {
+	sectionType := strings.TrimSpace(input.SectionType)
+	if !validSectionType(sectionType) {
+		return ErrInvalidSection
+	}
+	input.SectionType = sectionType
+	if input.Content == nil {
+		input.Content = map[string]any{}
+	}
+	if err := validateSectionContent(input.Content); err != nil {
+		return err
+	}
+	if input.SortOrder != nil && !validSortOrder(*input.SortOrder) {
+		return ErrInvalidSortOrder
+	}
+	return nil
+}
+
+func validateUpdateSection(input UpdateSectionInput) error {
+	if input.SectionType != nil {
+		*input.SectionType = strings.TrimSpace(*input.SectionType)
+		if !validSectionType(*input.SectionType) {
+			return ErrInvalidSection
+		}
+	}
+	if input.Content != nil {
+		if *input.Content == nil {
+			*input.Content = map[string]any{}
+		}
+		if err := validateSectionContent(*input.Content); err != nil {
+			return err
+		}
+	}
+	if input.SortOrder != nil && !validSortOrder(*input.SortOrder) {
+		return ErrInvalidSortOrder
+	}
+	return nil
+}
+
+func validateSectionID(sectionID string) error {
+	sectionID = strings.TrimSpace(sectionID)
+	if sectionID == "" || len(sectionID) > maxSectionIDLength {
+		return ErrInvalidSectionID
+	}
+	return nil
+}
+
+func validSectionType(value string) bool {
+	return value != "" && len(value) <= maxSectionTypeLength
+}
+
+func validateSectionContent(content map[string]any) error {
+	encoded, err := json.Marshal(content)
+	if err != nil || len(encoded) > maxSectionContentBytes {
+		return ErrInvalidSection
+	}
+	return nil
+}
+
+func validSortOrder(value int) bool {
+	return value >= 0 && value <= maxSortOrder
+}
+
 func validVisibility(value string) bool {
 	switch value {
 	case VisibilityDraft, VisibilityUnlisted, VisibilityPublic:
@@ -160,6 +301,14 @@ func (input UpdateInput) hasChanges() bool {
 		input.Visibility != nil ||
 		input.TemplateID != nil ||
 		input.Theme != nil
+}
+
+func (input UpdateSectionInput) hasChanges() bool {
+	return input.SectionType != nil ||
+		input.Content != nil ||
+		input.SortOrder != nil ||
+		input.IsVisible != nil ||
+		input.IsUserConfirmed != nil
 }
 
 func DefaultTemplateID() string {

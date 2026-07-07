@@ -9,12 +9,17 @@ import (
 
 type testStore struct {
 	profiles    map[string]Profile
+	sections    map[string]Section
 	ensureCount int
 	updateInput UpdateInput
+	nextSection int
 }
 
 func newTestStore() *testStore {
-	return &testStore{profiles: make(map[string]Profile)}
+	return &testStore{
+		profiles: make(map[string]Profile),
+		sections: make(map[string]Section),
+	}
 }
 
 func (s *testStore) GetByUserID(_ context.Context, userID string) (Profile, error) {
@@ -33,6 +38,90 @@ func (s *testStore) EnsureDefaultByUserID(_ context.Context, userID string) (Pro
 	}
 	s.profiles[userID] = profile
 	return profile, nil
+}
+
+func (s *testStore) ListSectionsByUserID(_ context.Context, userID string) ([]Section, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	sections := []Section{}
+	for _, section := range s.sections {
+		if section.ProfileID == profile.ID {
+			sections = append(sections, section)
+		}
+	}
+	return sections, nil
+}
+
+func (s *testStore) CreateSection(_ context.Context, profileID string, input CreateSectionInput) (Section, error) {
+	s.nextSection++
+	sortOrder := 0
+	if input.SortOrder != nil {
+		sortOrder = *input.SortOrder
+	}
+	isVisible := true
+	if input.IsVisible != nil {
+		isVisible = *input.IsVisible
+	}
+	isUserConfirmed := false
+	if input.IsUserConfirmed != nil {
+		isUserConfirmed = *input.IsUserConfirmed
+	}
+	section := defaultTestSection(profileID, "section_"+string(rune('0'+s.nextSection)))
+	section.SectionType = input.SectionType
+	section.Content = input.Content
+	section.SortOrder = sortOrder
+	section.IsVisible = isVisible
+	section.IsUserConfirmed = isUserConfirmed
+	s.sections[section.ID] = section
+	return section, nil
+}
+
+func (s *testStore) GetSectionByUserID(_ context.Context, userID string, sectionID string) (Section, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		return Section{}, ErrNotFound
+	}
+	section, ok := s.sections[sectionID]
+	if !ok || section.ProfileID != profile.ID {
+		return Section{}, ErrNotFound
+	}
+	return section, nil
+}
+
+func (s *testStore) UpdateSectionByUserID(_ context.Context, userID string, sectionID string, input UpdateSectionInput) (Section, error) {
+	section, err := s.GetSectionByUserID(context.Background(), userID, sectionID)
+	if err != nil {
+		return Section{}, err
+	}
+	if input.SectionType != nil {
+		section.SectionType = *input.SectionType
+	}
+	if input.Content != nil {
+		section.Content = *input.Content
+	}
+	if input.SortOrder != nil {
+		section.SortOrder = *input.SortOrder
+	}
+	if input.IsVisible != nil {
+		section.IsVisible = *input.IsVisible
+	}
+	if input.IsUserConfirmed != nil {
+		section.IsUserConfirmed = *input.IsUserConfirmed
+	}
+	section.UpdatedAt = section.UpdatedAt.Add(time.Second)
+	s.sections[section.ID] = section
+	return section, nil
+}
+
+func (s *testStore) DeleteSectionByUserID(_ context.Context, userID string, sectionID string) error {
+	section, err := s.GetSectionByUserID(context.Background(), userID, sectionID)
+	if err != nil {
+		return err
+	}
+	delete(s.sections, section.ID)
+	return nil
 }
 
 func (s *testStore) UpdateByUserID(_ context.Context, userID string, input UpdateInput) (Profile, error) {
@@ -195,6 +284,108 @@ func TestServiceUpdateRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestServiceSectionsEnsuresDefaultAndListsSections(t *testing.T) {
+	store := newTestStore()
+	service := NewService(store)
+
+	sections, err := service.Sections(context.Background(), "user_1")
+	if err != nil {
+		t.Fatalf("Sections returned error: %v", err)
+	}
+	if len(sections) != 0 {
+		t.Fatalf("sections = %#v, want empty", sections)
+	}
+	if store.ensureCount != 1 {
+		t.Fatalf("ensure count = %d, want 1", store.ensureCount)
+	}
+}
+
+func TestServiceCreateSectionNormalizesAndDefaults(t *testing.T) {
+	store := newTestStore()
+	service := NewService(store)
+	sortOrder := 7
+	confirmed := true
+
+	section, err := service.CreateSection(context.Background(), "user_1", CreateSectionInput{
+		SectionType:     " experience ",
+		Content:         map[string]any{"title": "API Platform"},
+		SortOrder:       &sortOrder,
+		IsUserConfirmed: &confirmed,
+	})
+	if err != nil {
+		t.Fatalf("CreateSection returned error: %v", err)
+	}
+	if section.SectionType != "experience" {
+		t.Fatalf("section type = %q, want experience", section.SectionType)
+	}
+	if section.SortOrder != 7 {
+		t.Fatalf("sort order = %d, want 7", section.SortOrder)
+	}
+	if !section.IsVisible {
+		t.Fatal("section should default to visible")
+	}
+	if !section.IsUserConfirmed {
+		t.Fatal("section should be user confirmed")
+	}
+	if got := section.Content["title"]; got != "API Platform" {
+		t.Fatalf("content title = %#v, want API Platform", got)
+	}
+}
+
+func TestServiceUpdateSectionCanHideSection(t *testing.T) {
+	store := newTestStore()
+	store.profiles["user_1"] = defaultTestProfile("user_1")
+	section := defaultTestSection("profile_user_1", "section_1")
+	store.sections[section.ID] = section
+	service := NewService(store)
+	visible := false
+
+	updated, err := service.UpdateSection(context.Background(), "user_1", "section_1", UpdateSectionInput{
+		IsVisible: &visible,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSection returned error: %v", err)
+	}
+	if updated.IsVisible {
+		t.Fatal("section should be hidden")
+	}
+}
+
+func TestServiceDeleteSectionChecksOwnership(t *testing.T) {
+	store := newTestStore()
+	store.profiles["user_1"] = defaultTestProfile("user_1")
+	store.profiles["user_2"] = defaultTestProfile("user_2")
+	section := defaultTestSection("profile_user_1", "section_1")
+	store.sections[section.ID] = section
+	service := NewService(store)
+
+	err := service.DeleteSection(context.Background(), "user_2", "section_1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete other user's section error = %v, want %v", err, ErrNotFound)
+	}
+
+	if err := service.DeleteSection(context.Background(), "user_1", "section_1"); err != nil {
+		t.Fatalf("DeleteSection returned error: %v", err)
+	}
+	if _, ok := store.sections["section_1"]; ok {
+		t.Fatal("section still exists after delete")
+	}
+}
+
+func TestServiceSectionRejectsInvalidInput(t *testing.T) {
+	service := NewService(newTestStore())
+	_, err := service.CreateSection(context.Background(), "user_1", CreateSectionInput{SectionType: "   "})
+	if !errors.Is(err, ErrInvalidSection) {
+		t.Fatalf("create error = %v, want %v", err, ErrInvalidSection)
+	}
+
+	sortOrder := -1
+	_, err = service.UpdateSection(context.Background(), "user_1", "section_1", UpdateSectionInput{SortOrder: &sortOrder})
+	if !errors.Is(err, ErrInvalidSortOrder) {
+		t.Fatalf("update error = %v, want %v", err, ErrInvalidSortOrder)
+	}
+}
+
 func defaultTestProfile(userID string) Profile {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	return Profile{
@@ -206,5 +397,19 @@ func defaultTestProfile(userID string) Profile {
 		Theme:       map[string]any{},
 		CreatedAt:   now,
 		UpdatedAt:   now,
+	}
+}
+
+func defaultTestSection(profileID string, sectionID string) Section {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	return Section{
+		ID:              sectionID,
+		ProfileID:       profileID,
+		SectionType:     "experience",
+		Content:         map[string]any{},
+		IsVisible:       true,
+		IsUserConfirmed: false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 }
