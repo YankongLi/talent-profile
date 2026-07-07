@@ -11,12 +11,15 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler) {
 		v1.POST("/auth/email-code", authHandler.requestEmailCode)
 		v1.POST("/auth/verify", authHandler.verify)
 		v1.POST("/auth/logout", authHandler.logout)
+		v1.GET("/auth/me", authHandler.me)
+		v1.DELETE("/account", authHandler.deleteAccount)
 	} else {
 		v1.POST("/auth/email-code", notImplementedHandler("email code login is not implemented"))
 		v1.POST("/auth/verify", notImplementedHandler("email verification is not implemented"))
 		v1.POST("/auth/logout", notImplementedHandler("logout is not implemented"))
+		v1.GET("/auth/me", notImplementedHandler("current user is not implemented"))
+		v1.DELETE("/account", notImplementedHandler("account deletion is not implemented"))
 	}
-	v1.DELETE("/account", notImplementedHandler("account deletion is not implemented"))
 
 	v1.POST("/resumes", notImplementedHandler("resume upload is not implemented"))
 	v1.GET("/resumes/:id/status", notImplementedHandler("resume status is not implemented"))

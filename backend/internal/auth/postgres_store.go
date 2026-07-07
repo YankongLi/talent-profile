@@ -125,3 +125,86 @@ func (s *PostgresStore) RevokeSessionByTokenHash(ctx context.Context, tokenHash 
 	}
 	return rowsAffected > 0, nil
 }
+
+func (s *PostgresStore) CurrentUserBySessionTokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
+	var user User
+	var verifiedAtValue sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT u.id::text, u.email, u.email_verified_at, u.status
+		FROM user_sessions us
+		JOIN users u ON u.id = us.user_id
+		WHERE us.token_hash = $1
+			AND us.revoked_at IS NULL
+			AND us.expires_at > $2
+			AND u.deleted_at IS NULL
+			AND u.status = 'active'
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &verifiedAtValue, &user.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrUnauthorized
+	}
+	if err != nil {
+		return User{}, err
+	}
+	if verifiedAtValue.Valid {
+		user.EmailVerifiedAt = &verifiedAtValue.Time
+	}
+	return user, nil
+}
+
+func (s *PostgresStore) SoftDeleteUserBySessionTokenHash(ctx context.Context, tokenHash string, deletedAt time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var userID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT u.id::text
+		FROM user_sessions us
+		JOIN users u ON u.id = us.user_id
+		WHERE us.token_hash = $1
+			AND us.revoked_at IS NULL
+			AND us.expires_at > $2
+			AND u.deleted_at IS NULL
+			AND u.status = 'active'
+		FOR UPDATE OF u
+	`, tokenHash, deletedAt).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return err
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET deleted_at = $2,
+			status = 'disabled'
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, userID, deletedAt)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrUnauthorized
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE user_sessions
+		SET revoked_at = $2
+		WHERE user_id = $1
+			AND revoked_at IS NULL
+	`, userID, deletedAt); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}

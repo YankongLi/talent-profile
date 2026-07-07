@@ -67,6 +67,7 @@ func TestV1RouteContractsReturnNotImplemented(t *testing.T) {
 		{http.MethodPost, "/api/v1/auth/email-code"},
 		{http.MethodPost, "/api/v1/auth/verify"},
 		{http.MethodPost, "/api/v1/auth/logout"},
+		{http.MethodGet, "/api/v1/auth/me"},
 		{http.MethodDelete, "/api/v1/account"},
 		{http.MethodPost, "/api/v1/resumes"},
 		{http.MethodGet, "/api/v1/resumes/resume_123/status"},
