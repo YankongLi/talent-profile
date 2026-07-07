@@ -14,13 +14,14 @@ import (
 var requestIDCounter uint64
 
 const (
-	ErrCodeBadRequest   = "bad_request"
-	ErrCodeUnauthorized = "unauthorized"
-	ErrCodeForbidden    = "forbidden"
-	ErrCodeConflict     = "conflict"
-	ErrCodeInternal     = "internal_error"
-	ErrCodeNotFound     = "not_found"
-	ErrCodeMethodDenied = "method_not_allowed"
+	ErrCodeBadRequest     = "bad_request"
+	ErrCodeUnauthorized   = "unauthorized"
+	ErrCodeForbidden      = "forbidden"
+	ErrCodeConflict       = "conflict"
+	ErrCodeInternal       = "internal_error"
+	ErrCodeNotFound       = "not_found"
+	ErrCodeMethodDenied   = "method_not_allowed"
+	ErrCodeNotImplemented = "not_implemented"
 
 	requestIDContextKey = "request_id"
 )

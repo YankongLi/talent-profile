@@ -27,6 +27,7 @@ func NewRouter(cfg config.Config) *gin.Engine {
 	router.HandleMethodNotAllowed = true
 	router.Use(
 		requestIDMiddleware(),
+		securityHeadersMiddleware(),
 		gin.CustomRecovery(func(c *gin.Context, recovered any) {
 			AbortWithError(c, http.StatusInternalServerError, ErrCodeInternal, "internal server error")
 		}),
@@ -44,6 +45,7 @@ func NewRouter(cfg config.Config) *gin.Engine {
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", healthHandler(cfg.AppName, cfg.Env))
+	registerV1Routes(v1)
 
 	return router
 }

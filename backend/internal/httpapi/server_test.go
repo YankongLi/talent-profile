@@ -39,6 +39,79 @@ func TestHealthRoutes(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	router := NewRouter(testConfig())
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
+		t.Fatalf("Referrer-Policy = %q, want strict-origin-when-cross-origin", got)
+	}
+}
+
+func TestV1RouteContractsReturnNotImplemented(t *testing.T) {
+	router := NewRouter(testConfig())
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/auth/email-code"},
+		{http.MethodPost, "/api/v1/auth/verify"},
+		{http.MethodPost, "/api/v1/auth/logout"},
+		{http.MethodDelete, "/api/v1/account"},
+		{http.MethodPost, "/api/v1/resumes"},
+		{http.MethodGet, "/api/v1/resumes/resume_123/status"},
+		{http.MethodDelete, "/api/v1/resumes/resume_123"},
+		{http.MethodPost, "/api/v1/resumes/resume_123/generate-profile"},
+		{http.MethodGet, "/api/v1/profile"},
+		{http.MethodPatch, "/api/v1/profile"},
+		{http.MethodPost, "/api/v1/profile/sections"},
+		{http.MethodPatch, "/api/v1/profile/sections/section_123"},
+		{http.MethodDelete, "/api/v1/profile/sections/section_123"},
+		{http.MethodPost, "/api/v1/profile/sections/reorder"},
+		{http.MethodPost, "/api/v1/profile/sections/section_123/rewrite"},
+		{http.MethodGet, "/api/v1/domains/check?slug=zhangsan"},
+		{http.MethodPut, "/api/v1/profile/domain"},
+		{http.MethodPost, "/api/v1/profile/publish"},
+		{http.MethodPost, "/api/v1/profile/unpublish"},
+		{http.MethodGet, "/api/v1/profile/preview"},
+		{http.MethodGet, "/api/v1/profile/analytics?range=7d"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotImplemented {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
+			}
+
+			var body ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != ErrCodeNotImplemented {
+				t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeNotImplemented)
+			}
+			if body.Error.RequestID == "" {
+				t.Fatal("request id is empty")
+			}
+		})
+	}
+}
+
 func TestNoRouteUsesJSONError(t *testing.T) {
 	router := NewRouter(testConfig())
 	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
