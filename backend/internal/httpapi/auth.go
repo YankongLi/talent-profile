@@ -151,6 +151,10 @@ func (h *authHandler) deleteAccount(c *gin.Context) {
 }
 
 func (h *authHandler) abortAuthError(c *gin.Context, err error) {
+	abortAuthError(c, err)
+}
+
+func abortAuthError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, auth.ErrInvalidEmail):
 		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid email")
@@ -180,6 +184,10 @@ func (h *authHandler) clearSessionCookie(c *gin.Context) {
 }
 
 func (h *authHandler) sessionToken(c *gin.Context) string {
+	return sessionToken(c, h.cfg.Auth.CookieName)
+}
+
+func sessionToken(c *gin.Context, cookieName string) string {
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader != "" {
 		parts := strings.Fields(authHeader)
@@ -188,7 +196,7 @@ func (h *authHandler) sessionToken(c *gin.Context) string {
 		}
 	}
 
-	token, err := c.Cookie(h.cfg.Auth.CookieName)
+	token, err := c.Cookie(cookieName)
 	if err != nil {
 		return ""
 	}

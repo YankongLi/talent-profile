@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler) {
+func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHandler *profileHandler) {
 	if authHandler != nil {
 		v1.POST("/auth/email-code", authHandler.requestEmailCode)
 		v1.POST("/auth/verify", authHandler.verify)
@@ -21,13 +21,19 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler) {
 		v1.DELETE("/account", notImplementedHandler("account deletion is not implemented"))
 	}
 
+	if profileHandler != nil {
+		v1.GET("/profile", profileHandler.get)
+		v1.PATCH("/profile", profileHandler.patch)
+	} else {
+		v1.GET("/profile", notImplementedHandler("profile retrieval is not implemented"))
+		v1.PATCH("/profile", notImplementedHandler("profile update is not implemented"))
+	}
+
 	v1.POST("/resumes", notImplementedHandler("resume upload is not implemented"))
 	v1.GET("/resumes/:id/status", notImplementedHandler("resume status is not implemented"))
 	v1.DELETE("/resumes/:id", notImplementedHandler("resume deletion is not implemented"))
 	v1.POST("/resumes/:id/generate-profile", notImplementedHandler("profile generation is not implemented"))
 
-	v1.GET("/profile", notImplementedHandler("profile retrieval is not implemented"))
-	v1.PATCH("/profile", notImplementedHandler("profile update is not implemented"))
 	v1.POST("/profile/sections", notImplementedHandler("profile section creation is not implemented"))
 	v1.PATCH("/profile/sections/:id", notImplementedHandler("profile section update is not implemented"))
 	v1.DELETE("/profile/sections/:id", notImplementedHandler("profile section deletion is not implemented"))

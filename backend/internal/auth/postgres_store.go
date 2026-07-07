@@ -74,9 +74,17 @@ func (s *PostgresStore) ConsumeEmailCode(ctx context.Context, id string, consume
 }
 
 func (s *PostgresStore) UpsertVerifiedUser(ctx context.Context, email string, verifiedAt time.Time) (User, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
 	var user User
 	var verifiedAtValue sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO users (email, email_verified_at, status)
 		VALUES ($1, $2, 'active')
 		ON CONFLICT (lower(email)) WHERE deleted_at IS NULL
@@ -92,7 +100,14 @@ func (s *PostgresStore) UpsertVerifiedUser(ctx context.Context, email string, ve
 	if verifiedAtValue.Valid {
 		user.EmailVerifiedAt = &verifiedAtValue.Time
 	}
-	return user, nil
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO profiles (user_id)
+		VALUES ($1)
+		ON CONFLICT (user_id) DO NOTHING
+	`, user.ID); err != nil {
+		return User{}, err
+	}
+	return user, tx.Commit()
 }
 
 func (s *PostgresStore) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (Session, error) {
