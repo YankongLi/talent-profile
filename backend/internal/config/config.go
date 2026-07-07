@@ -33,7 +33,11 @@ type HTTPConfig struct {
 }
 
 type DatabaseConfig struct {
-	DSN string
+	DSN             string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
 type RedisConfig struct {
@@ -73,6 +77,22 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	dbConnMaxLifetime, err := getDurationEnv("DATABASE_CONN_MAX_LIFETIME", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	dbConnMaxIdleTime, err := getDurationEnv("DATABASE_CONN_MAX_IDLE_TIME", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	dbMaxOpenConns, err := getIntEnv("DATABASE_MAX_OPEN_CONNS", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	dbMaxIdleConns, err := getIntEnv("DATABASE_MAX_IDLE_CONNS", 5)
+	if err != nil {
+		return Config{}, err
+	}
 	aiTimeout, err := getDurationEnv("AI_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -100,7 +120,11 @@ func Load() (Config, error) {
 			ShutdownTimeout: shutdownTimeout,
 		},
 		Database: DatabaseConfig{
-			DSN: getEnv("DATABASE_DSN", ""),
+			DSN:             getEnv("DATABASE_DSN", ""),
+			MaxOpenConns:    dbMaxOpenConns,
+			MaxIdleConns:    dbMaxIdleConns,
+			ConnMaxLifetime: dbConnMaxLifetime,
+			ConnMaxIdleTime: dbConnMaxIdleTime,
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("REDIS_ADDR", "127.0.0.1:6379"),
@@ -146,6 +170,21 @@ func (c Config) Validate() error {
 	}
 	if c.HTTP.ShutdownTimeout <= 0 {
 		return errors.New("http shutdown timeout must be positive")
+	}
+	if c.Database.MaxOpenConns <= 0 {
+		return errors.New("database max open conns must be positive")
+	}
+	if c.Database.MaxIdleConns < 0 {
+		return errors.New("database max idle conns must not be negative")
+	}
+	if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		return errors.New("database max idle conns must not exceed max open conns")
+	}
+	if c.Database.ConnMaxLifetime <= 0 {
+		return errors.New("database conn max lifetime must be positive")
+	}
+	if c.Database.ConnMaxIdleTime <= 0 {
+		return errors.New("database conn max idle time must be positive")
 	}
 	if c.Redis.Addr == "" {
 		return errors.New("redis addr is required")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/YankongLi/talent-profile/backend/internal/config"
+	"github.com/YankongLi/talent-profile/backend/internal/database"
 	"github.com/YankongLi/talent-profile/backend/internal/httpapi"
 )
 
@@ -21,6 +22,20 @@ func main() {
 	if err != nil {
 		logger.Error("load config failed", "error", err)
 		os.Exit(1)
+	}
+
+	if cfg.Database.DSN == "" {
+		logger.Warn("database dsn is empty; database connection disabled")
+	} else {
+		dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		db, err := database.Open(dbCtx, cfg.Database)
+		cancel()
+		if err != nil {
+			logger.Error("connect database failed", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		logger.Info("database connected")
 	}
 
 	server := httpapi.NewServer(cfg)
