@@ -14,7 +14,7 @@ const maxParseErrorLength = 500
 type WorkerStore interface {
 	GetByID(ctx context.Context, resumeID string) (Resume, error)
 	MarkParsing(ctx context.Context, resumeID string) error
-	MarkParsed(ctx context.Context, resumeID string, extractedText []byte) error
+	MarkParsed(ctx context.Context, resumeID string, result ParseResult) error
 	MarkFailed(ctx context.Context, resumeID string, reason string) error
 }
 
@@ -69,7 +69,7 @@ func (p *TextExtractionProcessor) ProcessTask(ctx context.Context, task *asynq.T
 		return err
 	}
 
-	if err := p.store.MarkParsed(ctx, resume.ID, []byte(text)); err != nil {
+	if err := p.store.MarkParsed(ctx, resume.ID, BuildParseResult(text)); err != nil {
 		return err
 	}
 	return nil

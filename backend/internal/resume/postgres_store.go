@@ -3,6 +3,7 @@ package resume
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -76,37 +77,70 @@ func (s *PostgresStore) SoftDeleteByUserID(ctx context.Context, userID string, r
 }
 
 func (s *PostgresStore) MarkParsing(ctx context.Context, resumeID string) error {
-	return s.updateParseState(ctx, resumeID, StatusParsing, nil, nil)
+	return s.updateParseState(ctx, resumeID, StatusParsing, nil)
 }
 
-func (s *PostgresStore) MarkParsed(ctx context.Context, resumeID string, extractedText []byte) error {
-	return s.updateParseState(ctx, resumeID, StatusParsed, extractedText, nil)
+func (s *PostgresStore) MarkParsed(ctx context.Context, resumeID string, result ParseResult) error {
+	sensitiveFieldsJSON, err := json.Marshal(result.SensitiveFields)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO resume_parse_results (
+			resume_id, extracted_text_encrypted, redacted_text, sensitive_fields_json
+		)
+		VALUES ($1, $2, $3, $4::jsonb)
+		ON CONFLICT (resume_id) DO UPDATE SET
+			extracted_text_encrypted = EXCLUDED.extracted_text_encrypted,
+			redacted_text = EXCLUDED.redacted_text,
+			sensitive_fields_json = EXCLUDED.sensitive_fields_json
+	`, resumeID, result.ExtractedText, result.RedactedText, string(sensitiveFieldsJSON)); err != nil {
+		return err
+	}
+
+	if err := updateParseStateTx(ctx, tx, resumeID, StatusParsed, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *PostgresStore) MarkFailed(ctx context.Context, resumeID string, reason string) error {
-	return s.updateParseState(ctx, resumeID, StatusFailed, nil, &reason)
+	return s.updateParseState(ctx, resumeID, StatusFailed, &reason)
 }
 
-func (s *PostgresStore) updateParseState(ctx context.Context, resumeID string, status string, extractedText []byte, parseError *string) error {
-	extractedTextSet := extractedText != nil
+func (s *PostgresStore) updateParseState(ctx context.Context, resumeID string, status string, parseError *string) error {
+	return updateParseStateTx(ctx, s.db, resumeID, status, parseError)
+}
+
+type parseStateExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func updateParseStateTx(ctx context.Context, executor parseStateExecutor, resumeID string, status string, parseError *string) error {
 	parseErrorSet := parseError != nil
 	parseErrorValue := ""
 	if parseError != nil {
 		parseErrorValue = *parseError
 	}
 
-	result, err := s.db.ExecContext(ctx, `
+	result, err := executor.ExecContext(ctx, `
 		UPDATE resumes
 		SET parse_status = $2,
-			extracted_text_encrypted = CASE WHEN $3 THEN $4 ELSE extracted_text_encrypted END,
 			parse_error = CASE
-				WHEN $5 THEN $6
+				WHEN $3 THEN $4
 				WHEN $2 IN ('parsing', 'parsed') THEN NULL
 				ELSE parse_error
 			END
 		WHERE id = $1
 			AND deleted_at IS NULL
-	`, resumeID, status, extractedTextSet, extractedText, parseErrorSet, parseErrorValue)
+	`, resumeID, status, parseErrorSet, parseErrorValue)
 	if err != nil {
 		return err
 	}
