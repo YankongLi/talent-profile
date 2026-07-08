@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"io"
 	"net/http"
 
 	authdomain "github.com/YankongLi/talent-profile/backend/internal/auth"
@@ -19,6 +20,10 @@ type profileHandler struct {
 type profileResponse struct {
 	Profile  profiledomain.Profile   `json:"profile"`
 	Sections []profiledomain.Section `json:"sections"`
+}
+
+type profileOnlyResponse struct {
+	Profile profiledomain.Profile `json:"profile"`
 }
 
 type updateProfileRequest struct {
@@ -44,6 +49,10 @@ type updateSectionRequest struct {
 	SortOrder       *int            `json:"sort_order"`
 	IsVisible       *bool           `json:"is_visible"`
 	IsUserConfirmed *bool           `json:"is_user_confirmed"`
+}
+
+type publishProfileRequest struct {
+	Visibility string `json:"visibility"`
 }
 
 type sectionResponse struct {
@@ -120,6 +129,44 @@ func (h *profileHandler) patch(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, profileResponse{Profile: profile, Sections: sections})
+}
+
+func (h *profileHandler) publish(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	var req publishProfileRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid request body")
+			return
+		}
+	}
+
+	profile, err := h.profileService.Publish(c.Request.Context(), user.ID, req.Visibility)
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, profileOnlyResponse{Profile: profile})
+}
+
+func (h *profileHandler) unpublish(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	profile, err := h.profileService.Unpublish(c.Request.Context(), user.ID)
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, profileOnlyResponse{Profile: profile})
 }
 
 func (h *profileHandler) createSection(c *gin.Context) {

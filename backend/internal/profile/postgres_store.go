@@ -68,6 +68,11 @@ func (s *PostgresStore) UpdateByUserID(ctx context.Context, userID string, input
 			summary = CASE WHEN $4 THEN $5 ELSE summary END,
 			target_roles_json = CASE WHEN $6 THEN $7::jsonb ELSE target_roles_json END,
 			visibility = CASE WHEN $8 THEN $9 ELSE visibility END,
+			published_at = CASE
+				WHEN $8 AND $9 = 'draft' THEN NULL
+				WHEN $8 AND $9 IN ('unlisted', 'public') THEN COALESCE(published_at, now())
+				ELSE published_at
+			END,
 			template_id = CASE WHEN $10 THEN $11 ELSE template_id END,
 			theme_json = CASE WHEN $12 THEN $13::jsonb ELSE theme_json END
 		WHERE user_id = $1
@@ -81,6 +86,62 @@ func (s *PostgresStore) UpdateByUserID(ctx context.Context, userID string, input
 		templateSet, templateID,
 		themeSet, themeJSON,
 	))
+}
+
+func (s *PostgresStore) PublishByUserID(ctx context.Context, userID string, visibility string) (Profile, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer tx.Rollback()
+
+	if _, err := ensureProfileIDTx(ctx, tx, userID); err != nil {
+		return Profile{}, err
+	}
+
+	profile, err := s.scanProfile(tx.QueryRowContext(ctx, `
+		UPDATE profiles
+		SET visibility = $2,
+			published_at = COALESCE(published_at, now())
+		WHERE user_id = $1
+		RETURNING id::text, user_id::text, headline, summary, target_roles_json, visibility,
+			template_id, theme_json, published_at, created_at, updated_at
+	`, userID, visibility))
+	if err != nil {
+		return Profile{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Profile{}, err
+	}
+	return profile, nil
+}
+
+func (s *PostgresStore) UnpublishByUserID(ctx context.Context, userID string) (Profile, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer tx.Rollback()
+
+	if _, err := ensureProfileIDTx(ctx, tx, userID); err != nil {
+		return Profile{}, err
+	}
+
+	profile, err := s.scanProfile(tx.QueryRowContext(ctx, `
+		UPDATE profiles
+		SET visibility = $2,
+			published_at = NULL
+		WHERE user_id = $1
+		RETURNING id::text, user_id::text, headline, summary, target_roles_json, visibility,
+			template_id, theme_json, published_at, created_at, updated_at
+	`, userID, VisibilityDraft))
+	if err != nil {
+		return Profile{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Profile{}, err
+	}
+	return profile, nil
 }
 
 func (s *PostgresStore) ListSectionsByUserID(ctx context.Context, userID string) ([]Section, error) {
@@ -402,6 +463,28 @@ func listSectionsByUserIDTx(ctx context.Context, tx *sql.Tx, userID string) ([]S
 		return nil, err
 	}
 	return sections, nil
+}
+
+func ensureProfileIDTx(ctx context.Context, tx *sql.Tx, userID string) (string, error) {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO profiles (user_id)
+		VALUES ($1)
+		ON CONFLICT (user_id) DO NOTHING
+	`, userID); err != nil {
+		return "", err
+	}
+
+	var profileID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id::text
+		FROM profiles
+		WHERE user_id = $1
+		FOR UPDATE
+	`, userID).Scan(&profileID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return profileID, err
 }
 
 func stringValue(value *string) (bool, string) {

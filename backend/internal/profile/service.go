@@ -43,6 +43,8 @@ type Store interface {
 	GetByUserID(ctx context.Context, userID string) (Profile, error)
 	EnsureDefaultByUserID(ctx context.Context, userID string) (Profile, error)
 	UpdateByUserID(ctx context.Context, userID string, input UpdateInput) (Profile, error)
+	PublishByUserID(ctx context.Context, userID string, visibility string) (Profile, error)
+	UnpublishByUserID(ctx context.Context, userID string) (Profile, error)
 	ListSectionsByUserID(ctx context.Context, userID string) ([]Section, error)
 	CreateSection(ctx context.Context, profileID string, input CreateSectionInput) (Section, error)
 	GetSectionByUserID(ctx context.Context, userID string, sectionID string) (Section, error)
@@ -133,6 +135,21 @@ func (s *Service) Update(ctx context.Context, userID string, input UpdateInput) 
 		return Profile{}, err
 	}
 	return s.store.UpdateByUserID(ctx, userID, input)
+}
+
+func (s *Service) Publish(ctx context.Context, userID string, visibility string) (Profile, error) {
+	visibility = strings.TrimSpace(visibility)
+	if visibility == "" {
+		visibility = VisibilityPublic
+	}
+	if !validPublishedVisibility(visibility) {
+		return Profile{}, ErrInvalidVisibility
+	}
+	return s.store.PublishByUserID(ctx, userID, visibility)
+}
+
+func (s *Service) Unpublish(ctx context.Context, userID string) (Profile, error) {
+	return s.store.UnpublishByUserID(ctx, userID)
 }
 
 func (s *Service) Sections(ctx context.Context, userID string) ([]Section, error) {
@@ -315,6 +332,15 @@ func validSortOrder(value int) bool {
 func validVisibility(value string) bool {
 	switch value {
 	case VisibilityDraft, VisibilityUnlisted, VisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPublishedVisibility(value string) bool {
+	switch value {
+	case VisibilityUnlisted, VisibilityPublic:
 		return true
 	default:
 		return false

@@ -169,6 +169,12 @@ func (s *testStore) UpdateByUserID(_ context.Context, userID string, input Updat
 	}
 	if input.Visibility != nil {
 		profile.Visibility = *input.Visibility
+		if profile.Visibility == VisibilityDraft {
+			profile.PublishedAt = nil
+		} else if profile.PublishedAt == nil {
+			publishedAt := profile.UpdatedAt.Add(time.Second)
+			profile.PublishedAt = &publishedAt
+		}
 	}
 	if input.TemplateID != nil {
 		profile.TemplateID = *input.TemplateID
@@ -176,6 +182,37 @@ func (s *testStore) UpdateByUserID(_ context.Context, userID string, input Updat
 	if input.Theme != nil {
 		profile.Theme = *input.Theme
 	}
+	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
+	s.profiles[userID] = profile
+	return profile, nil
+}
+
+func (s *testStore) PublishByUserID(_ context.Context, userID string, visibility string) (Profile, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		profile = defaultTestProfile(userID)
+		s.profiles[userID] = profile
+		s.ensureCount++
+	}
+	profile.Visibility = visibility
+	if profile.PublishedAt == nil {
+		publishedAt := profile.UpdatedAt.Add(time.Second)
+		profile.PublishedAt = &publishedAt
+	}
+	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
+	s.profiles[userID] = profile
+	return profile, nil
+}
+
+func (s *testStore) UnpublishByUserID(_ context.Context, userID string) (Profile, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		profile = defaultTestProfile(userID)
+		s.profiles[userID] = profile
+		s.ensureCount++
+	}
+	profile.Visibility = VisibilityDraft
+	profile.PublishedAt = nil
 	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
 	s.profiles[userID] = profile
 	return profile, nil
@@ -309,6 +346,73 @@ func TestServiceUpdateRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestServicePublishDefaultsToPublicAndSetsPublishedAt(t *testing.T) {
+	store := newTestStore()
+	service := NewService(store)
+
+	profile, err := service.Publish(context.Background(), "user_1", "")
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+	if profile.Visibility != VisibilityPublic {
+		t.Fatalf("visibility = %q, want %q", profile.Visibility, VisibilityPublic)
+	}
+	if profile.PublishedAt == nil {
+		t.Fatal("published at is nil")
+	}
+	if store.ensureCount != 1 {
+		t.Fatalf("ensure count = %d, want 1", store.ensureCount)
+	}
+}
+
+func TestServicePublishAllowsUnlisted(t *testing.T) {
+	store := newTestStore()
+	store.profiles["user_1"] = defaultTestProfile("user_1")
+	service := NewService(store)
+
+	profile, err := service.Publish(context.Background(), "user_1", " unlisted ")
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+	if profile.Visibility != VisibilityUnlisted {
+		t.Fatalf("visibility = %q, want %q", profile.Visibility, VisibilityUnlisted)
+	}
+}
+
+func TestServicePublishRejectsDraftAndInvalidVisibility(t *testing.T) {
+	service := NewService(newTestStore())
+
+	for _, visibility := range []string{VisibilityDraft, "private"} {
+		t.Run(visibility, func(t *testing.T) {
+			_, err := service.Publish(context.Background(), "user_1", visibility)
+			if !errors.Is(err, ErrInvalidVisibility) {
+				t.Fatalf("error = %v, want %v", err, ErrInvalidVisibility)
+			}
+		})
+	}
+}
+
+func TestServiceUnpublishSetsDraftAndClearsPublishedAt(t *testing.T) {
+	store := newTestStore()
+	profile := defaultTestProfile("user_1")
+	profile.Visibility = VisibilityPublic
+	publishedAt := time.Unix(1_700_000_100, 0).UTC()
+	profile.PublishedAt = &publishedAt
+	store.profiles["user_1"] = profile
+	service := NewService(store)
+
+	updated, err := service.Unpublish(context.Background(), "user_1")
+	if err != nil {
+		t.Fatalf("Unpublish returned error: %v", err)
+	}
+	if updated.Visibility != VisibilityDraft {
+		t.Fatalf("visibility = %q, want %q", updated.Visibility, VisibilityDraft)
+	}
+	if updated.PublishedAt != nil {
+		t.Fatalf("published at = %v, want nil", updated.PublishedAt)
 	}
 }
 

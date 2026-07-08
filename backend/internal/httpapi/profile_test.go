@@ -174,6 +174,12 @@ func (s *profileTestStore) UpdateByUserID(_ context.Context, userID string, inpu
 	}
 	if input.Visibility != nil {
 		profile.Visibility = *input.Visibility
+		if profile.Visibility == profiledomain.VisibilityDraft {
+			profile.PublishedAt = nil
+		} else if profile.PublishedAt == nil {
+			publishedAt := profile.UpdatedAt.Add(time.Second)
+			profile.PublishedAt = &publishedAt
+		}
 	}
 	if input.TemplateID != nil {
 		profile.TemplateID = *input.TemplateID
@@ -181,6 +187,37 @@ func (s *profileTestStore) UpdateByUserID(_ context.Context, userID string, inpu
 	if input.Theme != nil {
 		profile.Theme = *input.Theme
 	}
+	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
+	s.profiles[userID] = profile
+	return profile, nil
+}
+
+func (s *profileTestStore) PublishByUserID(_ context.Context, userID string, visibility string) (profiledomain.Profile, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		profile = defaultHTTPProfile(userID)
+		s.profiles[userID] = profile
+		s.ensureCount++
+	}
+	profile.Visibility = visibility
+	if profile.PublishedAt == nil {
+		publishedAt := profile.UpdatedAt.Add(time.Second)
+		profile.PublishedAt = &publishedAt
+	}
+	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
+	s.profiles[userID] = profile
+	return profile, nil
+}
+
+func (s *profileTestStore) UnpublishByUserID(_ context.Context, userID string) (profiledomain.Profile, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		profile = defaultHTTPProfile(userID)
+		s.profiles[userID] = profile
+		s.ensureCount++
+	}
+	profile.Visibility = profiledomain.VisibilityDraft
+	profile.PublishedAt = nil
 	profile.UpdatedAt = profile.UpdatedAt.Add(time.Second)
 	s.profiles[userID] = profile
 	return profile, nil
@@ -322,6 +359,147 @@ func TestProfilePatchRejectsInvalidBody(t *testing.T) {
 	}
 	if body.Error.Code != ErrCodeBadRequest {
 		t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeBadRequest)
+	}
+}
+
+func TestProfilePublishDefaultsToPublic(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/publish", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body profileOnlyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Profile.Visibility != profiledomain.VisibilityPublic {
+		t.Fatalf("visibility = %q, want %q", body.Profile.Visibility, profiledomain.VisibilityPublic)
+	}
+	if body.Profile.PublishedAt == nil {
+		t.Fatal("published at is nil")
+	}
+	if body.Profile.UserID != "user_1" {
+		t.Fatalf("profile user id = %q, want user_1", body.Profile.UserID)
+	}
+}
+
+func TestProfilePublishAllowsUnlisted(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/publish", bytes.NewBufferString(`{"visibility":"unlisted"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body profileOnlyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Profile.Visibility != profiledomain.VisibilityUnlisted {
+		t.Fatalf("visibility = %q, want %q", body.Profile.Visibility, profiledomain.VisibilityUnlisted)
+	}
+}
+
+func TestProfilePublishRejectsDraftVisibility(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/publish", bytes.NewBufferString(`{"visibility":"draft"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != ErrCodeBadRequest {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeBadRequest)
+	}
+}
+
+func TestProfileUnpublishSetsDraft(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/publish", bytes.NewBufferString(`{"visibility":"public"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("publish status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/profile/unpublish", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unpublish status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body profileOnlyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Profile.Visibility != profiledomain.VisibilityDraft {
+		t.Fatalf("visibility = %q, want %q", body.Profile.Visibility, profiledomain.VisibilityDraft)
+	}
+	if body.Profile.PublishedAt != nil {
+		t.Fatalf("published at = %v, want nil", body.Profile.PublishedAt)
+	}
+}
+
+func TestProfilePublishRequiresSession(t *testing.T) {
+	authService := newProfileTestAuthService(newAuthTestStore())
+	profileService := profiledomain.NewService(newProfileTestStore())
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profileService))
+
+	for _, path := range []string{"/api/v1/profile/publish", "/api/v1/profile/unpublish"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+			var body ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != ErrCodeUnauthorized {
+				t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeUnauthorized)
+			}
+		})
 	}
 }
 

@@ -24,6 +24,8 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	if profileHandler != nil {
 		v1.GET("/profile", profileHandler.get)
 		v1.PATCH("/profile", profileHandler.patch)
+		v1.POST("/profile/publish", profileHandler.publish)
+		v1.POST("/profile/unpublish", profileHandler.unpublish)
 		v1.POST("/profile/sections", profileHandler.createSection)
 		v1.POST("/profile/sections/reorder", profileHandler.reorderSections)
 		v1.PATCH("/profile/sections/:id", profileHandler.patchSection)
@@ -31,6 +33,8 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	} else {
 		v1.GET("/profile", notImplementedHandler("profile retrieval is not implemented"))
 		v1.PATCH("/profile", notImplementedHandler("profile update is not implemented"))
+		v1.POST("/profile/publish", notImplementedHandler("profile publishing is not implemented"))
+		v1.POST("/profile/unpublish", notImplementedHandler("profile unpublishing is not implemented"))
 		v1.POST("/profile/sections", notImplementedHandler("profile section creation is not implemented"))
 		v1.POST("/profile/sections/reorder", notImplementedHandler("profile section reorder is not implemented"))
 		v1.PATCH("/profile/sections/:id", notImplementedHandler("profile section update is not implemented"))
@@ -54,8 +58,6 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	} else {
 		v1.PUT("/profile/domain", notImplementedHandler("profile domain update is not implemented"))
 	}
-	v1.POST("/profile/publish", notImplementedHandler("profile publishing is not implemented"))
-	v1.POST("/profile/unpublish", notImplementedHandler("profile unpublishing is not implemented"))
 	v1.GET("/profile/preview", notImplementedHandler("profile preview is not implemented"))
 
 	v1.GET("/profile/analytics", notImplementedHandler("profile analytics is not implemented"))
