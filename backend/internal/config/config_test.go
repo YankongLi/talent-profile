@@ -29,6 +29,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("STORAGE_ACCESS_KEY_ID", "")
 	t.Setenv("STORAGE_SECRET_ACCESS_KEY", "")
 	t.Setenv("STORAGE_USE_SSL", "")
+	t.Setenv("STORAGE_SIGNED_URL_TTL", "")
 	t.Setenv("AI_PROVIDER", "")
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("AI_MODEL", "")
@@ -80,6 +81,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.Storage.Bucket != "talentpage-private" {
 		t.Fatalf("Storage.Bucket = %q, want talentpage-private", cfg.Storage.Bucket)
 	}
+	if cfg.Storage.SignedURLTTL != 5*time.Minute {
+		t.Fatalf("Storage.SignedURLTTL = %s, want 5m", cfg.Storage.SignedURLTTL)
+	}
 	if cfg.AI.Provider != "deepseek" {
 		t.Fatalf("AI.Provider = %q, want deepseek", cfg.AI.Provider)
 	}
@@ -112,6 +116,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("STORAGE_ACCESS_KEY_ID", "minio")
 	t.Setenv("STORAGE_SECRET_ACCESS_KEY", "minio-secret")
 	t.Setenv("STORAGE_USE_SSL", "true")
+	t.Setenv("STORAGE_SIGNED_URL_TTL", "2m")
 	t.Setenv("AI_PROVIDER", "deepseek")
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("AI_MODEL", "deepseek-reasoner")
@@ -165,6 +170,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if !cfg.Storage.UseSSL {
 		t.Fatal("Storage.UseSSL = false, want true")
+	}
+	if cfg.Storage.SignedURLTTL != 2*time.Minute {
+		t.Fatalf("Storage.SignedURLTTL = %s", cfg.Storage.SignedURLTTL)
 	}
 	if cfg.AI.Model != "deepseek-reasoner" {
 		t.Fatalf("AI.Model = %q", cfg.AI.Model)
@@ -237,8 +245,9 @@ func TestValidateRejectsInvalidDatabasePool(t *testing.T) {
 			Addr: "127.0.0.1:6379",
 		},
 		Storage: StorageConfig{
-			Endpoint: "127.0.0.1:9000",
-			Bucket:   "talentpage-private",
+			Endpoint:     "127.0.0.1:9000",
+			Bucket:       "talentpage-private",
+			SignedURLTTL: time.Minute,
 		},
 		AI: AIConfig{
 			Provider:      "deepseek",
@@ -320,8 +329,9 @@ func TestValidateRejectsInvalidAuthConfig(t *testing.T) {
 			Addr: "127.0.0.1:6379",
 		},
 		Storage: StorageConfig{
-			Endpoint: "127.0.0.1:9000",
-			Bucket:   "talentpage-private",
+			Endpoint:     "127.0.0.1:9000",
+			Bucket:       "talentpage-private",
+			SignedURLTTL: time.Minute,
 		},
 		AI: AIConfig{
 			Provider:      "deepseek",

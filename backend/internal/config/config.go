@@ -60,6 +60,7 @@ type StorageConfig struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	UseSSL          bool
+	SignedURLTTL    time.Duration
 }
 
 type AIConfig struct {
@@ -120,6 +121,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	storageSignedURLTTL, err := getDurationEnv("STORAGE_SIGNED_URL_TTL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 	aiMaxRetries, err := getIntEnv("AI_MAX_RETRIES", 2)
 	if err != nil {
 		return Config{}, err
@@ -158,6 +163,7 @@ func Load() (Config, error) {
 			AccessKeyID:     getEnv("STORAGE_ACCESS_KEY_ID", ""),
 			SecretAccessKey: getEnv("STORAGE_SECRET_ACCESS_KEY", ""),
 			UseSSL:          storageUseSSL,
+			SignedURLTTL:    storageSignedURLTTL,
 		},
 		AI: AIConfig{
 			Provider:      getEnv("AI_PROVIDER", "deepseek"),
@@ -226,6 +232,9 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.Bucket == "" {
 		return errors.New("storage bucket is required")
+	}
+	if c.Storage.SignedURLTTL <= 0 {
+		return errors.New("storage signed url ttl must be positive")
 	}
 	if c.AI.Provider == "" {
 		return errors.New("ai provider is required")
