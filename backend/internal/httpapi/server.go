@@ -9,6 +9,8 @@ import (
 	"github.com/YankongLi/talent-profile/backend/internal/config"
 	profiledomain "github.com/YankongLi/talent-profile/backend/internal/profile"
 	"github.com/YankongLi/talent-profile/backend/internal/publishing"
+	resumedomain "github.com/YankongLi/talent-profile/backend/internal/resume"
+	"github.com/YankongLi/talent-profile/backend/internal/storage"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,6 +21,8 @@ type routerOptions struct {
 	authService    *auth.Service
 	profileService *profiledomain.Service
 	publishService *publishing.Service
+	resumeService  *resumedomain.Service
+	storageClient  storage.Client
 	logger         *slog.Logger
 }
 
@@ -43,6 +47,18 @@ func WithProfileService(service *profiledomain.Service) RouterOption {
 func WithPublishingService(service *publishing.Service) RouterOption {
 	return func(opts *routerOptions) {
 		opts.publishService = service
+	}
+}
+
+func WithResumeService(service *resumedomain.Service) RouterOption {
+	return func(opts *routerOptions) {
+		opts.resumeService = service
+	}
+}
+
+func WithStorageClient(client storage.Client) RouterOption {
+	return func(opts *routerOptions) {
+		opts.storageClient = client
 	}
 }
 
@@ -95,6 +111,16 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 	if publishService == nil && opts.db != nil {
 		publishService = publishing.NewService(publishing.NewPostgresStore(opts.db))
 	}
+	storageClient := opts.storageClient
+	if storageClient == nil && storageConfigured(cfg.Storage) {
+		if client, err := storage.NewMinIOClient(cfg.Storage); err == nil {
+			storageClient = client
+		}
+	}
+	resumeService := opts.resumeService
+	if resumeService == nil && opts.db != nil && storageClient != nil {
+		resumeService = resumedomain.NewService(resumedomain.NewPostgresStore(opts.db), storageClient)
+	}
 
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
@@ -123,7 +149,15 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 		newAuthHandler(cfg, authService),
 		newProfileHandler(cfg, authService, profileService),
 		newDomainHandler(cfg, authService, publishService),
+		newResumeHandler(cfg, authService, resumeService),
 	)
 
 	return router
+}
+
+func storageConfigured(cfg config.StorageConfig) bool {
+	return cfg.Endpoint != "" &&
+		cfg.Bucket != "" &&
+		cfg.AccessKeyID != "" &&
+		cfg.SecretAccessKey != ""
 }

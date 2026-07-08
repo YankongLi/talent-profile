@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHandler *profileHandler, domainHandler *domainHandler) {
+func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHandler *profileHandler, domainHandler *domainHandler, resumeHandler *resumeHandler) {
 	if authHandler != nil {
 		v1.POST("/auth/email-code", authHandler.requestEmailCode)
 		v1.POST("/auth/verify", authHandler.verify)
@@ -41,7 +41,11 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 		v1.DELETE("/profile/sections/:id", notImplementedHandler("profile section deletion is not implemented"))
 	}
 
-	v1.POST("/resumes", notImplementedHandler("resume upload is not implemented"))
+	if resumeHandler != nil {
+		v1.POST("/resumes", resumeHandler.upload)
+	} else {
+		v1.POST("/resumes", notImplementedHandler("resume upload is not implemented"))
+	}
 	v1.GET("/resumes/:id/status", notImplementedHandler("resume status is not implemented"))
 	v1.DELETE("/resumes/:id", notImplementedHandler("resume deletion is not implemented"))
 	v1.POST("/resumes/:id/generate-profile", notImplementedHandler("profile generation is not implemented"))
