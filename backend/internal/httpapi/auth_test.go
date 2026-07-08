@@ -98,6 +98,43 @@ func (s *authTestStore) RevokeSessionByTokenHash(_ context.Context, tokenHash st
 	return true, nil
 }
 
+func (s *authTestStore) CurrentUserBySessionTokenHash(_ context.Context, tokenHash string, now time.Time) (auth.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[tokenHash]
+	if !ok || !now.Before(session.ExpiresAt) {
+		return auth.User{}, auth.ErrUnauthorized
+	}
+	for _, user := range s.users {
+		if user.ID == session.UserID && user.Status == "active" {
+			return user, nil
+		}
+	}
+	return auth.User{}, auth.ErrUnauthorized
+}
+
+func (s *authTestStore) SoftDeleteUserBySessionTokenHash(_ context.Context, tokenHash string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[tokenHash]
+	if !ok || !now.Before(session.ExpiresAt) {
+		return auth.ErrUnauthorized
+	}
+	for email, user := range s.users {
+		if user.ID == session.UserID && user.Status == "active" {
+			user.Status = "disabled"
+			s.users[email] = user
+			for existingTokenHash, existingSession := range s.sessions {
+				if existingSession.UserID == user.ID {
+					delete(s.sessions, existingTokenHash)
+				}
+			}
+			return nil
+		}
+	}
+	return auth.ErrUnauthorized
+}
+
 type authTestSender struct{}
 
 func (authTestSender) SendLoginCode(context.Context, string, string) error {
@@ -166,5 +203,72 @@ func TestAuthVerifyRejectsInvalidCode(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthMeAndDeleteAccountRoutes(t *testing.T) {
+	service := auth.NewService(newAuthTestStore(), authTestSender{}, auth.Config{
+		CodeTTL:         time.Minute,
+		SessionTTL:      time.Hour,
+		ExposeDebugCode: true,
+	})
+	router := NewRouter(testConfig(), WithAuthService(service))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email-code", bytes.NewBufferString(`{"email":"user@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	var codeBody emailCodeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &codeBody); err != nil {
+		t.Fatalf("decode email-code response: %v", err)
+	}
+
+	verifyBody := `{"email":"user@example.com","code":"` + codeBody.DebugCode + `"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify", bytes.NewBufferString(verifyBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	var verifyBodyResponse verifyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &verifyBodyResponse); err != nil {
+		t.Fatalf("decode verify response: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+verifyBodyResponse.Token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var meBody meResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &meBody); err != nil {
+		t.Fatalf("decode me response: %v", err)
+	}
+	if meBody.User.Email != "user@example.com" {
+		t.Fatalf("me email = %q, want user@example.com", meBody.User.Email)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/account", nil)
+	req.Header.Set("Authorization", "Bearer "+verifyBodyResponse.Token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete account status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Result().Cookies(); len(got) == 0 || got[0].Name != "talentpage_session" || got[0].MaxAge != -1 {
+		t.Fatalf("clear session cookie = %#v", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+verifyBodyResponse.Token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("me after delete status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

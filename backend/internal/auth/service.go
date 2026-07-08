@@ -37,6 +37,8 @@ type Store interface {
 	UpsertVerifiedUser(ctx context.Context, email string, verifiedAt time.Time) (User, error)
 	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (Session, error)
 	RevokeSessionByTokenHash(ctx context.Context, tokenHash string, revokedAt time.Time) (bool, error)
+	CurrentUserBySessionTokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
+	SoftDeleteUserBySessionTokenHash(ctx context.Context, tokenHash string, deletedAt time.Time) error
 }
 
 type EmailCodeSender interface {
@@ -208,6 +210,20 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	}
 	_, err := s.store.RevokeSessionByTokenHash(ctx, HashSessionToken(token), s.now().UTC())
 	return err
+}
+
+func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
+	if strings.TrimSpace(token) == "" {
+		return User{}, ErrSessionTokenEmpty
+	}
+	return s.store.CurrentUserBySessionTokenHash(ctx, HashSessionToken(token), s.now().UTC())
+}
+
+func (s *Service) DeleteAccount(ctx context.Context, token string) error {
+	if strings.TrimSpace(token) == "" {
+		return ErrSessionTokenEmpty
+	}
+	return s.store.SoftDeleteUserBySessionTokenHash(ctx, HashSessionToken(token), s.now().UTC())
 }
 
 func NormalizeEmail(value string) (string, error) {

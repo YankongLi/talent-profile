@@ -40,6 +40,10 @@ type verifyResponse struct {
 	User      auth.User `json:"user"`
 }
 
+type meResponse struct {
+	User auth.User `json:"user"`
+}
+
 type okResponse struct {
 	OK bool `json:"ok"`
 }
@@ -114,7 +118,43 @@ func (h *authHandler) logout(c *gin.Context) {
 	c.JSON(http.StatusOK, okResponse{OK: true})
 }
 
+func (h *authHandler) me(c *gin.Context) {
+	token := h.sessionToken(c)
+	if token == "" {
+		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "missing session token")
+		return
+	}
+
+	user, err := h.service.CurrentUser(c.Request.Context(), token)
+	if err != nil {
+		h.abortAuthError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, meResponse{User: user})
+}
+
+func (h *authHandler) deleteAccount(c *gin.Context) {
+	token := h.sessionToken(c)
+	if token == "" {
+		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "missing session token")
+		return
+	}
+
+	if err := h.service.DeleteAccount(c.Request.Context(), token); err != nil {
+		h.abortAuthError(c, err)
+		return
+	}
+
+	h.clearSessionCookie(c)
+	c.JSON(http.StatusOK, okResponse{OK: true})
+}
+
 func (h *authHandler) abortAuthError(c *gin.Context, err error) {
+	abortAuthError(c, err)
+}
+
+func abortAuthError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, auth.ErrInvalidEmail):
 		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid email")
@@ -122,6 +162,8 @@ func (h *authHandler) abortAuthError(c *gin.Context, err error) {
 		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "invalid email code")
 	case errors.Is(err, auth.ErrSessionTokenEmpty):
 		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "missing session token")
+	case errors.Is(err, auth.ErrUnauthorized):
+		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "unauthorized")
 	default:
 		AbortWithError(c, http.StatusInternalServerError, ErrCodeInternal, "internal server error")
 	}
@@ -142,6 +184,10 @@ func (h *authHandler) clearSessionCookie(c *gin.Context) {
 }
 
 func (h *authHandler) sessionToken(c *gin.Context) string {
+	return sessionToken(c, h.cfg.Auth.CookieName)
+}
+
+func sessionToken(c *gin.Context, cookieName string) string {
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader != "" {
 		parts := strings.Fields(authHeader)
@@ -150,7 +196,7 @@ func (h *authHandler) sessionToken(c *gin.Context) string {
 		}
 	}
 
-	token, err := c.Cookie(h.cfg.Auth.CookieName)
+	token, err := c.Cookie(cookieName)
 	if err != nil {
 		return ""
 	}

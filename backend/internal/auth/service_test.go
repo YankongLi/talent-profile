@@ -115,6 +115,45 @@ func (s *memoryStore) RevokeSessionByTokenHash(_ context.Context, tokenHash stri
 	return true, nil
 }
 
+func (s *memoryStore) CurrentUserBySessionTokenHash(_ context.Context, tokenHash string, now time.Time) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[tokenHash]
+	if !ok || !now.Before(session.ExpiresAt) {
+		return User{}, ErrUnauthorized
+	}
+	for _, user := range s.users {
+		if user.ID == session.UserID && user.Status == "active" {
+			return user, nil
+		}
+	}
+	return User{}, ErrUnauthorized
+}
+
+func (s *memoryStore) SoftDeleteUserBySessionTokenHash(_ context.Context, tokenHash string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[tokenHash]
+	if !ok || !now.Before(session.ExpiresAt) {
+		return ErrUnauthorized
+	}
+	for email, user := range s.users {
+		if user.ID == session.UserID && user.Status == "active" {
+			user.Status = "disabled"
+			s.users[email] = user
+			for existingTokenHash, existingSession := range s.sessions {
+				if existingSession.UserID == user.ID {
+					delete(s.sessions, existingTokenHash)
+				}
+			}
+			return nil
+		}
+	}
+	return ErrUnauthorized
+}
+
 type captureSender struct {
 	email string
 	code  string
@@ -170,6 +209,55 @@ func TestVerifyEmailCodeCreatesUserAndSession(t *testing.T) {
 	}
 	if _, ok := store.sessions[HashSessionToken("token_123")]; !ok {
 		t.Fatal("session was not stored by token hash")
+	}
+}
+
+func TestCurrentUserReturnsSessionUser(t *testing.T) {
+	store := newMemoryStore()
+	service := NewService(store, &captureSender{}, Config{CodeTTL: time.Minute, SessionTTL: time.Hour})
+	service.generateCode = func() (string, error) { return "123456", nil }
+	service.generateToken = func() (string, error) { return "token_123", nil }
+
+	if _, err := service.RequestEmailCode(context.Background(), "user@example.com"); err != nil {
+		t.Fatalf("RequestEmailCode() error = %v", err)
+	}
+	if _, err := service.VerifyEmailCode(context.Background(), "user@example.com", "123456"); err != nil {
+		t.Fatalf("VerifyEmailCode() error = %v", err)
+	}
+
+	user, err := service.CurrentUser(context.Background(), "token_123")
+	if err != nil {
+		t.Fatalf("CurrentUser() error = %v", err)
+	}
+	if user.Email != "user@example.com" {
+		t.Fatalf("Email = %q, want user@example.com", user.Email)
+	}
+}
+
+func TestDeleteAccountSoftDeletesUserAndRevokesSessions(t *testing.T) {
+	store := newMemoryStore()
+	service := NewService(store, &captureSender{}, Config{CodeTTL: time.Minute, SessionTTL: time.Hour})
+	service.generateCode = func() (string, error) { return "123456", nil }
+	service.generateToken = func() (string, error) { return "token_123", nil }
+
+	if _, err := service.RequestEmailCode(context.Background(), "user@example.com"); err != nil {
+		t.Fatalf("RequestEmailCode() error = %v", err)
+	}
+	if _, err := service.VerifyEmailCode(context.Background(), "user@example.com", "123456"); err != nil {
+		t.Fatalf("VerifyEmailCode() error = %v", err)
+	}
+
+	if err := service.DeleteAccount(context.Background(), "token_123"); err != nil {
+		t.Fatalf("DeleteAccount() error = %v", err)
+	}
+	if status := store.users["user@example.com"].Status; status != "disabled" {
+		t.Fatalf("user status = %q, want disabled", status)
+	}
+	if _, ok := store.sessions[HashSessionToken("token_123")]; ok {
+		t.Fatal("session was not revoked")
+	}
+	if _, err := service.CurrentUser(context.Background(), "token_123"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("CurrentUser() after delete error = %v, want ErrUnauthorized", err)
 	}
 }
 
