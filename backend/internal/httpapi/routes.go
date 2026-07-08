@@ -49,7 +49,11 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	} else {
 		v1.GET("/domains/check", notImplementedHandler("domain availability check is not implemented"))
 	}
-	v1.PUT("/profile/domain", notImplementedHandler("profile domain update is not implemented"))
+	if domainHandler != nil && domainHandler.canUpdate() {
+		v1.PUT("/profile/domain", domainHandler.update)
+	} else {
+		v1.PUT("/profile/domain", notImplementedHandler("profile domain update is not implemented"))
+	}
 	v1.POST("/profile/publish", notImplementedHandler("profile publishing is not implemented"))
 	v1.POST("/profile/unpublish", notImplementedHandler("profile unpublishing is not implemented"))
 	v1.GET("/profile/preview", notImplementedHandler("profile preview is not implemented"))

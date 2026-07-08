@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 const (
+	DefaultDomainRedirectTTL = 7 * 24 * time.Hour
+
 	SlugUnavailableRequired      = "required"
 	SlugUnavailableTooShort      = "too_short"
 	SlugUnavailableTooLong       = "too_long"
@@ -16,18 +19,37 @@ const (
 	SlugUnavailableTaken         = "taken"
 )
 
+var ErrSlugTaken = errors.New("slug is already taken")
+
 type Store interface {
 	SlugExists(ctx context.Context, slug string) (bool, error)
+	SetPrimaryDomainByUserID(ctx context.Context, userID string, slug string, redirectTTL time.Duration) (SetPrimaryDomainResult, error)
 }
 
 type Service struct {
 	store Store
 }
 
+type Domain struct {
+	ID                string     `json:"id"`
+	ProfileID         string     `json:"profile_id"`
+	Slug              string     `json:"slug"`
+	IsPrimary         bool       `json:"is_primary"`
+	RedirectToSlug    string     `json:"redirect_to_slug,omitempty"`
+	RedirectExpiresAt *time.Time `json:"redirect_expires_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type SlugAvailability struct {
 	Slug      string `json:"slug"`
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+type SetPrimaryDomainResult struct {
+	Domain         Domain  `json:"domain"`
+	PreviousDomain *Domain `json:"previous_domain,omitempty"`
 }
 
 func NewService(store Store) *Service {
@@ -60,6 +82,14 @@ func (s *Service) CheckSlug(ctx context.Context, slug string) (SlugAvailability,
 		Slug:      slug,
 		Available: true,
 	}, nil
+}
+
+func (s *Service) SetPrimaryDomain(ctx context.Context, userID string, slug string) (SetPrimaryDomainResult, error) {
+	slug = strings.TrimSpace(slug)
+	if err := ValidateSlug(slug); err != nil {
+		return SetPrimaryDomainResult{}, err
+	}
+	return s.store.SetPrimaryDomainByUserID(ctx, userID, slug, DefaultDomainRedirectTTL)
 }
 
 func slugUnavailableReason(err error) string {

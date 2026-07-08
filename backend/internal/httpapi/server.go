@@ -122,7 +122,7 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 		v1,
 		newAuthHandler(cfg, authService),
 		newProfileHandler(cfg, authService, profileService),
-		newDomainHandler(publishService),
+		newDomainHandler(cfg, authService, publishService),
 	)
 
 	return router

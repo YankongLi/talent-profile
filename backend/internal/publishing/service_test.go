@@ -4,22 +4,38 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type testStore struct {
-	slugs map[string]bool
-	err   error
+	slugs     map[string]bool
+	err       error
+	setResult SetPrimaryDomainResult
+	setErr    error
+	setUserID string
+	setSlug   string
+	setTTL    time.Duration
 }
 
-func (s testStore) SlugExists(_ context.Context, slug string) (bool, error) {
+func (s *testStore) SlugExists(_ context.Context, slug string) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
 	return s.slugs[slug], nil
 }
 
+func (s *testStore) SetPrimaryDomainByUserID(_ context.Context, userID string, slug string, redirectTTL time.Duration) (SetPrimaryDomainResult, error) {
+	s.setUserID = userID
+	s.setSlug = slug
+	s.setTTL = redirectTTL
+	if s.setErr != nil {
+		return SetPrimaryDomainResult{}, s.setErr
+	}
+	return s.setResult, nil
+}
+
 func TestServiceCheckSlugAvailable(t *testing.T) {
-	service := NewService(testStore{slugs: map[string]bool{}})
+	service := NewService(&testStore{slugs: map[string]bool{}})
 
 	result, err := service.CheckSlug(context.Background(), " zhangsan ")
 	if err != nil {
@@ -37,7 +53,7 @@ func TestServiceCheckSlugAvailable(t *testing.T) {
 }
 
 func TestServiceCheckSlugTaken(t *testing.T) {
-	service := NewService(testStore{slugs: map[string]bool{"zhangsan": true}})
+	service := NewService(&testStore{slugs: map[string]bool{"zhangsan": true}})
 
 	result, err := service.CheckSlug(context.Background(), "zhangsan")
 	if err != nil {
@@ -67,7 +83,7 @@ func TestServiceCheckSlugInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewService(testStore{slugs: map[string]bool{}})
+			service := NewService(&testStore{slugs: map[string]bool{}})
 
 			result, err := service.CheckSlug(context.Background(), tt.slug)
 			if err != nil {
@@ -85,10 +101,54 @@ func TestServiceCheckSlugInvalid(t *testing.T) {
 
 func TestServiceCheckSlugPropagatesStoreError(t *testing.T) {
 	wantErr := errors.New("database failed")
-	service := NewService(testStore{err: wantErr})
+	service := NewService(&testStore{err: wantErr})
 
 	_, err := service.CheckSlug(context.Background(), "zhangsan")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestServiceSetPrimaryDomainNormalizesAndDelegates(t *testing.T) {
+	store := &testStore{
+		setResult: SetPrimaryDomainResult{
+			Domain: Domain{Slug: "zhangsan", IsPrimary: true},
+		},
+	}
+	service := NewService(store)
+
+	result, err := service.SetPrimaryDomain(context.Background(), "user_1", " zhangsan ")
+	if err != nil {
+		t.Fatalf("SetPrimaryDomain returned error: %v", err)
+	}
+	if result.Domain.Slug != "zhangsan" {
+		t.Fatalf("domain slug = %q, want zhangsan", result.Domain.Slug)
+	}
+	if store.setUserID != "user_1" {
+		t.Fatalf("set user id = %q, want user_1", store.setUserID)
+	}
+	if store.setSlug != "zhangsan" {
+		t.Fatalf("set slug = %q, want zhangsan", store.setSlug)
+	}
+	if store.setTTL != DefaultDomainRedirectTTL {
+		t.Fatalf("redirect ttl = %s, want %s", store.setTTL, DefaultDomainRedirectTTL)
+	}
+}
+
+func TestServiceSetPrimaryDomainRejectsInvalidSlug(t *testing.T) {
+	service := NewService(&testStore{})
+
+	_, err := service.SetPrimaryDomain(context.Background(), "user_1", "api")
+	if !errors.Is(err, ErrSlugReserved) {
+		t.Fatalf("error = %v, want %v", err, ErrSlugReserved)
+	}
+}
+
+func TestServiceSetPrimaryDomainPropagatesTaken(t *testing.T) {
+	service := NewService(&testStore{setErr: ErrSlugTaken})
+
+	_, err := service.SetPrimaryDomain(context.Background(), "user_1", "zhangsan")
+	if !errors.Is(err, ErrSlugTaken) {
+		t.Fatalf("error = %v, want %v", err, ErrSlugTaken)
 	}
 }
