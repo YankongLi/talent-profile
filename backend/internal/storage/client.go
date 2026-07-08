@@ -16,6 +16,7 @@ import (
 
 type Client interface {
 	Put(ctx context.Context, input PutObjectInput) (ObjectInfo, error)
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (*url.URL, error)
 	Delete(ctx context.Context, key string) error
 }
@@ -94,6 +95,17 @@ func (c *MinIOClient) Put(ctx context.Context, input PutObjectInput) (ObjectInfo
 		ETag:        info.ETag,
 		ContentType: input.ContentType,
 	}, nil
+}
+
+func (c *MinIOClient) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if key == "" {
+		return nil, errors.New("object key is required")
+	}
+	object, err := c.client.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get object %q: %w", key, err)
+	}
+	return object, nil
 }
 
 func (c *MinIOClient) PresignedGetURL(ctx context.Context, key string, expires time.Duration) (*url.URL, error) {

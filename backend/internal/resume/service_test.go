@@ -70,6 +70,10 @@ func (s *resumeTestObjects) Put(_ context.Context, input storage.PutObjectInput)
 	return storage.ObjectInfo{Key: input.Key, Size: input.Size, ContentType: input.ContentType}, nil
 }
 
+func (s *resumeTestObjects) Get(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.putContent)), nil
+}
+
 func (s *resumeTestObjects) PresignedGetURL(_ context.Context, _ string, _ time.Duration) (*url.URL, error) {
 	return nil, nil
 }
@@ -77,6 +81,16 @@ func (s *resumeTestObjects) PresignedGetURL(_ context.Context, _ string, _ time.
 func (s *resumeTestObjects) Delete(_ context.Context, key string) error {
 	s.deletedKey = key
 	return nil
+}
+
+type resumeTestEnqueuer struct {
+	resumeID string
+	err      error
+}
+
+func (e *resumeTestEnqueuer) EnqueueTextExtraction(_ context.Context, resumeID string) error {
+	e.resumeID = resumeID
+	return e.err
 }
 
 func TestServiceUploadPDF(t *testing.T) {
@@ -114,6 +128,23 @@ func TestServiceUploadPDF(t *testing.T) {
 	}
 	if !bytes.Equal(objects.putContent, content) {
 		t.Fatal("stored object content does not match upload")
+	}
+}
+
+func TestServiceUploadEnqueuesTextExtraction(t *testing.T) {
+	enqueuer := &resumeTestEnqueuer{}
+	service := NewServiceWithQueue(&resumeTestStore{}, &resumeTestObjects{}, enqueuer)
+
+	resume, err := service.Upload(context.Background(), "user_1", UploadInput{
+		OriginalFilename: "resume.pdf",
+		ContentType:      MimePDF,
+		Reader:           bytes.NewReader([]byte("%PDF-1.7\nbody")),
+	})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if enqueuer.resumeID != resume.ID {
+		t.Fatalf("enqueued resume id = %q, want %q", enqueuer.resumeID, resume.ID)
 	}
 }
 
@@ -274,12 +305,16 @@ func testDOCX(t *testing.T) []byte {
 
 	var buf bytes.Buffer
 	writer := zip.NewWriter(&buf)
-	for _, name := range []string{"[Content_Types].xml", "word/document.xml"} {
+	files := map[string]string{
+		"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>`,
+		"word/document.xml":   `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello world</w:t></w:r></w:p></w:body></w:document>`,
+	}
+	for name, content := range files {
 		file, err := writer.Create(name)
 		if err != nil {
 			t.Fatalf("create docx entry: %v", err)
 		}
-		if _, err := file.Write([]byte("<xml/>")); err != nil {
+		if _, err := file.Write([]byte(content)); err != nil {
 			t.Fatalf("write docx entry: %v", err)
 		}
 	}

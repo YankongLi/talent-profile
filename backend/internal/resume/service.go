@@ -46,9 +46,14 @@ type Store interface {
 	SoftDeleteByUserID(ctx context.Context, userID string, resumeID string, deletedAt time.Time) error
 }
 
+type TaskEnqueuer interface {
+	EnqueueTextExtraction(ctx context.Context, resumeID string) error
+}
+
 type Service struct {
-	store   Store
-	objects storage.Client
+	store    Store
+	objects  storage.Client
+	enqueuer TaskEnqueuer
 }
 
 type Resume struct {
@@ -82,6 +87,10 @@ type CreateInput struct {
 
 func NewService(store Store, objects storage.Client) *Service {
 	return &Service{store: store, objects: objects}
+}
+
+func NewServiceWithQueue(store Store, objects storage.Client, enqueuer TaskEnqueuer) *Service {
+	return &Service{store: store, objects: objects, enqueuer: enqueuer}
 }
 
 func (s *Service) Status(ctx context.Context, userID string, resumeID string) (Resume, error) {
@@ -157,6 +166,11 @@ func (s *Service) Upload(ctx context.Context, userID string, input UploadInput) 
 	if err != nil {
 		_ = s.objects.Delete(ctx, objectKey)
 		return Resume{}, err
+	}
+	if s.enqueuer != nil {
+		if err := s.enqueuer.EnqueueTextExtraction(ctx, resume.ID); err != nil {
+			return Resume{}, fmt.Errorf("enqueue resume text extraction: %w", err)
+		}
 	}
 	return resume, nil
 }

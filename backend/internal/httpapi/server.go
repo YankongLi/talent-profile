@@ -22,6 +22,7 @@ type routerOptions struct {
 	profileService *profiledomain.Service
 	publishService *publishing.Service
 	resumeService  *resumedomain.Service
+	resumeTasks    resumedomain.TaskEnqueuer
 	storageClient  storage.Client
 	logger         *slog.Logger
 }
@@ -53,6 +54,12 @@ func WithPublishingService(service *publishing.Service) RouterOption {
 func WithResumeService(service *resumedomain.Service) RouterOption {
 	return func(opts *routerOptions) {
 		opts.resumeService = service
+	}
+}
+
+func WithResumeTaskEnqueuer(enqueuer resumedomain.TaskEnqueuer) RouterOption {
+	return func(opts *routerOptions) {
+		opts.resumeTasks = enqueuer
 	}
 }
 
@@ -119,7 +126,11 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 	}
 	resumeService := opts.resumeService
 	if resumeService == nil && opts.db != nil && storageClient != nil {
-		resumeService = resumedomain.NewService(resumedomain.NewPostgresStore(opts.db), storageClient)
+		resumeTasks := opts.resumeTasks
+		if resumeTasks == nil && cfg.Redis.Addr != "" {
+			resumeTasks = resumedomain.NewAsynqTextExtractionEnqueuer(cfg.Redis)
+		}
+		resumeService = resumedomain.NewServiceWithQueue(resumedomain.NewPostgresStore(opts.db), storageClient, resumeTasks)
 	}
 
 	router := gin.New()

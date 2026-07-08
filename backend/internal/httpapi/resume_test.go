@@ -75,6 +75,10 @@ func (s *resumeHTTPTestObjects) Put(_ context.Context, input storage.PutObjectIn
 	return storage.ObjectInfo{Key: input.Key, Size: input.Size, ContentType: input.ContentType}, nil
 }
 
+func (s *resumeHTTPTestObjects) Get(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
 func (s *resumeHTTPTestObjects) PresignedGetURL(_ context.Context, _ string, _ time.Duration) (*url.URL, error) {
 	return nil, nil
 }
