@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 type PostgresStore struct {
@@ -208,6 +209,92 @@ func (s *PostgresStore) DeleteSectionByUserID(ctx context.Context, userID string
 	return nil
 }
 
+func (s *PostgresStore) ReorderSectionsByUserID(ctx context.Context, userID string, sectionIDs []string) ([]Section, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var profileID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id::text
+		FROM profiles
+		WHERE user_id = $1
+		FOR UPDATE
+	`, userID).Scan(&profileID); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT ps.id::text
+		FROM profile_sections ps
+		WHERE ps.profile_id = $1
+		ORDER BY ps.sort_order ASC, ps.created_at ASC, ps.id ASC
+		FOR UPDATE
+	`, profileID)
+	if err != nil {
+		return nil, err
+	}
+
+	existing := make(map[string]struct{}, len(sectionIDs))
+	for rows.Next() {
+		var sectionID string
+		if err := rows.Scan(&sectionID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		existing[sectionID] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(existing) != len(sectionIDs) {
+		return nil, ErrNotFound
+	}
+	for _, sectionID := range sectionIDs {
+		if _, ok := existing[sectionID]; !ok {
+			return nil, ErrNotFound
+		}
+	}
+
+	for index, sectionID := range sectionIDs {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE profile_sections ps
+			SET sort_order = $3
+			FROM profiles p
+			WHERE p.id = ps.profile_id
+				AND p.user_id = $1
+				AND ps.id = $2
+		`, userID, sectionID, index)
+		if err != nil {
+			return nil, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rowsAffected != 1 {
+			return nil, fmt.Errorf("profile section reorder affected %d rows", rowsAffected)
+		}
+	}
+
+	sections, err := listSectionsByUserIDTx(ctx, tx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return sections, nil
+}
+
 type profileRow interface {
 	Scan(dest ...any) error
 }
@@ -287,6 +374,34 @@ func scanSection(row sectionRow) (Section, error) {
 		section.Content = map[string]any{}
 	}
 	return section, nil
+}
+
+func listSectionsByUserIDTx(ctx context.Context, tx *sql.Tx, userID string) ([]Section, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT ps.id::text, ps.profile_id::text, ps.section_type, ps.content_json,
+			ps.sort_order, ps.is_visible, ps.is_user_confirmed, ps.created_at, ps.updated_at
+		FROM profile_sections ps
+		JOIN profiles p ON p.id = ps.profile_id
+		WHERE p.user_id = $1
+		ORDER BY ps.sort_order ASC, ps.created_at ASC, ps.id ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sections := []Section{}
+	for rows.Next() {
+		section, err := scanSection(rows)
+		if err != nil {
+			return nil, err
+		}
+		sections = append(sections, section)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return sections, nil
 }
 
 func stringValue(value *string) (bool, string) {

@@ -50,6 +50,14 @@ type sectionResponse struct {
 	Section profiledomain.Section `json:"section"`
 }
 
+type reorderSectionsRequest struct {
+	SectionIDs []string `json:"section_ids"`
+}
+
+type reorderSectionsResponse struct {
+	Sections []profiledomain.Section `json:"sections"`
+}
+
 func newProfileHandler(cfg config.Config, authService *authdomain.Service, profileService *profiledomain.Service) *profileHandler {
 	if authService == nil || profileService == nil {
 		return nil
@@ -180,6 +188,27 @@ func (h *profileHandler) deleteSection(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, okResponse{OK: true})
+}
+
+func (h *profileHandler) reorderSections(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	var req reorderSectionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	sections, err := h.profileService.ReorderSections(c.Request.Context(), user.ID, req.SectionIDs)
+	if err != nil {
+		h.abortProfileError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, reorderSectionsResponse{Sections: sections})
 }
 
 func (h *profileHandler) currentUser(c *gin.Context) (authdomain.User, bool) {

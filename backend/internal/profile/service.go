@@ -48,6 +48,7 @@ type Store interface {
 	GetSectionByUserID(ctx context.Context, userID string, sectionID string) (Section, error)
 	UpdateSectionByUserID(ctx context.Context, userID string, sectionID string, input UpdateSectionInput) (Section, error)
 	DeleteSectionByUserID(ctx context.Context, userID string, sectionID string) error
+	ReorderSectionsByUserID(ctx context.Context, userID string, sectionIDs []string) ([]Section, error)
 }
 
 type Service struct {
@@ -172,6 +173,13 @@ func (s *Service) DeleteSection(ctx context.Context, userID string, sectionID st
 	return s.store.DeleteSectionByUserID(ctx, userID, sectionID)
 }
 
+func (s *Service) ReorderSections(ctx context.Context, userID string, sectionIDs []string) ([]Section, error) {
+	if err := validateSectionIDs(sectionIDs); err != nil {
+		return nil, err
+	}
+	return s.store.ReorderSectionsByUserID(ctx, userID, sectionIDs)
+}
+
 func validateUpdate(input UpdateInput) error {
 	if input.Headline != nil {
 		*input.Headline = strings.TrimSpace(*input.Headline)
@@ -265,6 +273,25 @@ func validateSectionID(sectionID string) error {
 	sectionID = strings.TrimSpace(sectionID)
 	if sectionID == "" || len(sectionID) > maxSectionIDLength {
 		return ErrInvalidSectionID
+	}
+	return nil
+}
+
+func validateSectionIDs(sectionIDs []string) error {
+	if len(sectionIDs) == 0 {
+		return ErrInvalidSectionID
+	}
+	seen := make(map[string]struct{}, len(sectionIDs))
+	for index, sectionID := range sectionIDs {
+		normalized := strings.TrimSpace(sectionID)
+		if normalized == "" || len(normalized) > maxSectionIDLength {
+			return ErrInvalidSectionID
+		}
+		if _, ok := seen[normalized]; ok {
+			return ErrInvalidSectionID
+		}
+		seen[normalized] = struct{}{}
+		sectionIDs[index] = normalized
 	}
 	return nil
 }

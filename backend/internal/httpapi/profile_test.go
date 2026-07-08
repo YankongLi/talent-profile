@@ -130,6 +130,34 @@ func (s *profileTestStore) DeleteSectionByUserID(_ context.Context, userID strin
 	return nil
 }
 
+func (s *profileTestStore) ReorderSectionsByUserID(_ context.Context, userID string, sectionIDs []string) ([]profiledomain.Section, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		return nil, profiledomain.ErrNotFound
+	}
+	userSections := make(map[string]profiledomain.Section)
+	for _, section := range s.sections {
+		if section.ProfileID == profile.ID {
+			userSections[section.ID] = section
+		}
+	}
+	if len(userSections) != len(sectionIDs) {
+		return nil, profiledomain.ErrNotFound
+	}
+	sections := make([]profiledomain.Section, 0, len(sectionIDs))
+	for index, sectionID := range sectionIDs {
+		section, ok := userSections[sectionID]
+		if !ok {
+			return nil, profiledomain.ErrNotFound
+		}
+		section.SortOrder = index
+		section.UpdatedAt = section.UpdatedAt.Add(time.Second)
+		s.sections[section.ID] = section
+		sections = append(sections, section)
+	}
+	return sections, nil
+}
+
 func (s *profileTestStore) UpdateByUserID(_ context.Context, userID string, input profiledomain.UpdateInput) (profiledomain.Profile, error) {
 	profile, ok := s.profiles[userID]
 	if !ok {
@@ -375,6 +403,88 @@ func TestProfileSectionRoutesCreateHideAndDeleteSection(t *testing.T) {
 	}
 	if _, ok := profileStore.sections[createBody.Section.ID]; ok {
 		t.Fatal("section still exists after delete")
+	}
+}
+
+func TestProfileSectionRoutesReorderSections(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	createSection := func(sectionType string, sortOrder int) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/sections", bytes.NewBufferString(fmt.Sprintf(`{
+			"section_type":%q,
+			"content":{"title":%q},
+			"sort_order":%d
+		}`, sectionType, sectionType, sortOrder)))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create status = %d, want %d, body %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		var body sectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode create response: %v", err)
+		}
+		return body.Section.ID
+	}
+
+	firstID := createSection("experience", 0)
+	secondID := createSection("project", 1)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/sections/reorder", bytes.NewBufferString(fmt.Sprintf(`{
+		"section_ids":[%q,%q]
+	}`, secondID, firstID)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reorder status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body reorderSectionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode reorder response: %v", err)
+	}
+	if len(body.Sections) != 2 {
+		t.Fatalf("sections len = %d, want 2", len(body.Sections))
+	}
+	if body.Sections[0].ID != secondID || body.Sections[0].SortOrder != 0 {
+		t.Fatalf("first reordered section = %#v, want second section sort 0", body.Sections[0])
+	}
+	if body.Sections[1].ID != firstID || body.Sections[1].SortOrder != 1 {
+		t.Fatalf("second reordered section = %#v, want first section sort 1", body.Sections[1])
+	}
+}
+
+func TestProfileSectionRoutesRejectInvalidReorder(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	profileStore := newProfileTestStore()
+	router := NewRouter(testConfig(), WithAuthService(authService), WithProfileService(profiledomain.NewService(profileStore)))
+	token := loginProfileTestUser(t, authService, "user@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/sections/reorder", bytes.NewBufferString(`{"section_ids":["section_1","section_1"]}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != ErrCodeBadRequest {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeBadRequest)
 	}
 }
 

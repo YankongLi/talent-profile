@@ -124,6 +124,34 @@ func (s *testStore) DeleteSectionByUserID(_ context.Context, userID string, sect
 	return nil
 }
 
+func (s *testStore) ReorderSectionsByUserID(_ context.Context, userID string, sectionIDs []string) ([]Section, error) {
+	profile, ok := s.profiles[userID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	userSections := make(map[string]Section)
+	for _, section := range s.sections {
+		if section.ProfileID == profile.ID {
+			userSections[section.ID] = section
+		}
+	}
+	if len(userSections) != len(sectionIDs) {
+		return nil, ErrNotFound
+	}
+	sections := make([]Section, 0, len(sectionIDs))
+	for index, sectionID := range sectionIDs {
+		section, ok := userSections[sectionID]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		section.SortOrder = index
+		section.UpdatedAt = section.UpdatedAt.Add(time.Second)
+		s.sections[section.ID] = section
+		sections = append(sections, section)
+	}
+	return sections, nil
+}
+
 func (s *testStore) UpdateByUserID(_ context.Context, userID string, input UpdateInput) (Profile, error) {
 	profile, ok := s.profiles[userID]
 	if !ok {
@@ -372,6 +400,47 @@ func TestServiceDeleteSectionChecksOwnership(t *testing.T) {
 	}
 }
 
+func TestServiceReorderSectionsUpdatesSortOrder(t *testing.T) {
+	store := newTestStore()
+	store.profiles["user_1"] = defaultTestProfile("user_1")
+	store.sections["section_1"] = defaultTestSection("profile_user_1", "section_1")
+	store.sections["section_2"] = defaultTestSection("profile_user_1", "section_2")
+	service := NewService(store)
+
+	sections, err := service.ReorderSections(context.Background(), "user_1", []string{" section_2 ", "section_1"})
+	if err != nil {
+		t.Fatalf("ReorderSections returned error: %v", err)
+	}
+	if len(sections) != 2 {
+		t.Fatalf("sections len = %d, want 2", len(sections))
+	}
+	if sections[0].ID != "section_2" || sections[0].SortOrder != 0 {
+		t.Fatalf("first section = %#v, want section_2 sort 0", sections[0])
+	}
+	if sections[1].ID != "section_1" || sections[1].SortOrder != 1 {
+		t.Fatalf("second section = %#v, want section_1 sort 1", sections[1])
+	}
+}
+
+func TestServiceReorderSectionsRequiresCurrentUserFullSet(t *testing.T) {
+	store := newTestStore()
+	store.profiles["user_1"] = defaultTestProfile("user_1")
+	store.profiles["user_2"] = defaultTestProfile("user_2")
+	store.sections["section_1"] = defaultTestSection("profile_user_1", "section_1")
+	store.sections["section_2"] = defaultTestSection("profile_user_2", "section_2")
+	service := NewService(store)
+
+	_, err := service.ReorderSections(context.Background(), "user_1", []string{"section_2"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reorder other user's section error = %v, want %v", err, ErrNotFound)
+	}
+
+	_, err = service.ReorderSections(context.Background(), "user_1", []string{"section_1", "section_2"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reorder mixed sections error = %v, want %v", err, ErrNotFound)
+	}
+}
+
 func TestServiceSectionRejectsInvalidInput(t *testing.T) {
 	service := NewService(newTestStore())
 	_, err := service.CreateSection(context.Background(), "user_1", CreateSectionInput{SectionType: "   "})
@@ -383,6 +452,11 @@ func TestServiceSectionRejectsInvalidInput(t *testing.T) {
 	_, err = service.UpdateSection(context.Background(), "user_1", "section_1", UpdateSectionInput{SortOrder: &sortOrder})
 	if !errors.Is(err, ErrInvalidSortOrder) {
 		t.Fatalf("update error = %v, want %v", err, ErrInvalidSortOrder)
+	}
+
+	_, err = service.ReorderSections(context.Background(), "user_1", []string{"section_1", " section_1 "})
+	if !errors.Is(err, ErrInvalidSectionID) {
+		t.Fatalf("reorder duplicate error = %v, want %v", err, ErrInvalidSectionID)
 	}
 }
 

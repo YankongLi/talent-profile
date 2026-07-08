@@ -25,12 +25,14 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 		v1.GET("/profile", profileHandler.get)
 		v1.PATCH("/profile", profileHandler.patch)
 		v1.POST("/profile/sections", profileHandler.createSection)
+		v1.POST("/profile/sections/reorder", profileHandler.reorderSections)
 		v1.PATCH("/profile/sections/:id", profileHandler.patchSection)
 		v1.DELETE("/profile/sections/:id", profileHandler.deleteSection)
 	} else {
 		v1.GET("/profile", notImplementedHandler("profile retrieval is not implemented"))
 		v1.PATCH("/profile", notImplementedHandler("profile update is not implemented"))
 		v1.POST("/profile/sections", notImplementedHandler("profile section creation is not implemented"))
+		v1.POST("/profile/sections/reorder", notImplementedHandler("profile section reorder is not implemented"))
 		v1.PATCH("/profile/sections/:id", notImplementedHandler("profile section update is not implemented"))
 		v1.DELETE("/profile/sections/:id", notImplementedHandler("profile section deletion is not implemented"))
 	}
@@ -40,7 +42,6 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	v1.DELETE("/resumes/:id", notImplementedHandler("resume deletion is not implemented"))
 	v1.POST("/resumes/:id/generate-profile", notImplementedHandler("profile generation is not implemented"))
 
-	v1.POST("/profile/sections/reorder", notImplementedHandler("profile section reorder is not implemented"))
 	v1.POST("/profile/sections/:id/rewrite", notImplementedHandler("profile section rewrite is not implemented"))
 
 	v1.GET("/domains/check", notImplementedHandler("domain availability check is not implemented"))
