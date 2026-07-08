@@ -49,8 +49,10 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 	v1.POST("/profile/sections/:id/rewrite", notImplementedHandler("profile section rewrite is not implemented"))
 
 	if domainHandler != nil {
+		v1.GET("/public/profile", domainHandler.publicProfile)
 		v1.GET("/domains/check", domainHandler.check)
 	} else {
+		v1.GET("/public/profile", notImplementedHandler("public profile retrieval is not implemented"))
 		v1.GET("/domains/check", notImplementedHandler("domain availability check is not implemented"))
 	}
 	if domainHandler != nil && domainHandler.canUpdate() {

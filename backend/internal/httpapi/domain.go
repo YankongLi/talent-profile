@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	authdomain "github.com/YankongLi/talent-profile/backend/internal/auth"
 	"github.com/YankongLi/talent-profile/backend/internal/config"
@@ -29,6 +30,12 @@ type checkDomainResponse struct {
 type updateDomainResponse struct {
 	Domain         publishing.Domain  `json:"domain"`
 	PreviousDomain *publishing.Domain `json:"previous_domain,omitempty"`
+}
+
+type publicProfileResponse struct {
+	Slug           string                        `json:"slug,omitempty"`
+	RedirectToSlug string                        `json:"redirect_to_slug,omitempty"`
+	Page           *publishing.PublicProfilePage `json:"page,omitempty"`
 }
 
 func newDomainHandler(cfg config.Config, authService *authdomain.Service, publishingService *publishing.Service) *domainHandler {
@@ -58,6 +65,24 @@ func (h *domainHandler) check(c *gin.Context) {
 		Available: result.Available,
 		Reason:    result.Reason,
 	})
+}
+
+func (h *domainHandler) publicProfile(c *gin.Context) {
+	slug := publicSlug(c)
+	result, err := h.publishingService.GetPublicProfile(c.Request.Context(), slug)
+	if err != nil {
+		abortPublicProfileError(c, err)
+		return
+	}
+	if result.Redirect != nil {
+		c.JSON(http.StatusOK, publicProfileResponse{
+			Slug:           result.Redirect.Slug,
+			RedirectToSlug: result.Redirect.RedirectToSlug,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, publicProfileResponse{Page: result.Page})
 }
 
 func (h *domainHandler) update(c *gin.Context) {
@@ -113,4 +138,35 @@ func abortPublishingError(c *gin.Context, err error) {
 	default:
 		AbortWithError(c, http.StatusInternalServerError, ErrCodeInternal, "internal server error")
 	}
+}
+
+func abortPublicProfileError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, publishing.ErrPublicProfileNotFound):
+		AbortWithError(c, http.StatusNotFound, ErrCodeNotFound, "public profile not found")
+	default:
+		AbortWithError(c, http.StatusInternalServerError, ErrCodeInternal, "internal server error")
+	}
+}
+
+func publicSlug(c *gin.Context) string {
+	if slug := strings.TrimSpace(c.Query("slug")); slug != "" {
+		return slug
+	}
+
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		host = strings.TrimSpace(c.GetHeader("Host"))
+	}
+	if host == "" {
+		return ""
+	}
+	if colon := strings.LastIndex(host, ":"); colon >= 0 {
+		host = host[:colon]
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[0]
 }

@@ -20,10 +20,12 @@ const (
 )
 
 var ErrSlugTaken = errors.New("slug is already taken")
+var ErrPublicProfileNotFound = errors.New("public profile not found")
 
 type Store interface {
 	SlugExists(ctx context.Context, slug string) (bool, error)
 	SetPrimaryDomainByUserID(ctx context.Context, userID string, slug string, redirectTTL time.Duration) (SetPrimaryDomainResult, error)
+	GetPublicProfileBySlug(ctx context.Context, slug string, now time.Time) (PublicProfileResult, error)
 }
 
 type Service struct {
@@ -50,6 +52,40 @@ type SlugAvailability struct {
 type SetPrimaryDomainResult struct {
 	Domain         Domain  `json:"domain"`
 	PreviousDomain *Domain `json:"previous_domain,omitempty"`
+}
+
+type PublicProfileResult struct {
+	Page     *PublicProfilePage `json:"page,omitempty"`
+	Redirect *PublicRedirect    `json:"redirect,omitempty"`
+}
+
+type PublicRedirect struct {
+	Slug           string `json:"slug"`
+	RedirectToSlug string `json:"redirect_to_slug"`
+}
+
+type PublicProfilePage struct {
+	Slug          string          `json:"slug"`
+	CanonicalSlug string          `json:"canonical_slug"`
+	Visibility    string          `json:"visibility"`
+	NoIndex       bool            `json:"noindex"`
+	Profile       PublicProfile   `json:"profile"`
+	Sections      []PublicSection `json:"sections"`
+}
+
+type PublicProfile struct {
+	Headline    string         `json:"headline"`
+	Summary     string         `json:"summary"`
+	TargetRoles []string       `json:"target_roles"`
+	TemplateID  string         `json:"template_id"`
+	Theme       map[string]any `json:"theme"`
+	PublishedAt *time.Time     `json:"published_at,omitempty"`
+}
+
+type PublicSection struct {
+	SectionType string         `json:"section_type"`
+	Content     map[string]any `json:"content"`
+	SortOrder   int            `json:"sort_order"`
 }
 
 func NewService(store Store) *Service {
@@ -90,6 +126,14 @@ func (s *Service) SetPrimaryDomain(ctx context.Context, userID string, slug stri
 		return SetPrimaryDomainResult{}, err
 	}
 	return s.store.SetPrimaryDomainByUserID(ctx, userID, slug, DefaultDomainRedirectTTL)
+}
+
+func (s *Service) GetPublicProfile(ctx context.Context, slug string) (PublicProfileResult, error) {
+	slug = strings.TrimSpace(slug)
+	if err := ValidateSlug(slug); err != nil {
+		return PublicProfileResult{}, ErrPublicProfileNotFound
+	}
+	return s.store.GetPublicProfileBySlug(ctx, slug, time.Now().UTC())
 }
 
 func slugUnavailableReason(err error) string {

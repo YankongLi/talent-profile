@@ -8,13 +8,16 @@ import (
 )
 
 type testStore struct {
-	slugs     map[string]bool
-	err       error
-	setResult SetPrimaryDomainResult
-	setErr    error
-	setUserID string
-	setSlug   string
-	setTTL    time.Duration
+	slugs        map[string]bool
+	err          error
+	setResult    SetPrimaryDomainResult
+	setErr       error
+	setUserID    string
+	setSlug      string
+	setTTL       time.Duration
+	publicResult PublicProfileResult
+	publicErr    error
+	publicSlug   string
 }
 
 func (s *testStore) SlugExists(_ context.Context, slug string) (bool, error) {
@@ -32,6 +35,14 @@ func (s *testStore) SetPrimaryDomainByUserID(_ context.Context, userID string, s
 		return SetPrimaryDomainResult{}, s.setErr
 	}
 	return s.setResult, nil
+}
+
+func (s *testStore) GetPublicProfileBySlug(_ context.Context, slug string, _ time.Time) (PublicProfileResult, error) {
+	s.publicSlug = slug
+	if s.publicErr != nil {
+		return PublicProfileResult{}, s.publicErr
+	}
+	return s.publicResult, nil
 }
 
 func TestServiceCheckSlugAvailable(t *testing.T) {
@@ -150,5 +161,34 @@ func TestServiceSetPrimaryDomainPropagatesTaken(t *testing.T) {
 	_, err := service.SetPrimaryDomain(context.Background(), "user_1", "zhangsan")
 	if !errors.Is(err, ErrSlugTaken) {
 		t.Fatalf("error = %v, want %v", err, ErrSlugTaken)
+	}
+}
+
+func TestServiceGetPublicProfileNormalizesSlug(t *testing.T) {
+	store := &testStore{
+		publicResult: PublicProfileResult{
+			Page: &PublicProfilePage{Slug: "zhangsan"},
+		},
+	}
+	service := NewService(store)
+
+	result, err := service.GetPublicProfile(context.Background(), " zhangsan ")
+	if err != nil {
+		t.Fatalf("GetPublicProfile returned error: %v", err)
+	}
+	if result.Page == nil || result.Page.Slug != "zhangsan" {
+		t.Fatalf("result = %#v, want page zhangsan", result)
+	}
+	if store.publicSlug != "zhangsan" {
+		t.Fatalf("public slug = %q, want zhangsan", store.publicSlug)
+	}
+}
+
+func TestServiceGetPublicProfileRejectsInvalidSlugAsNotFound(t *testing.T) {
+	service := NewService(&testStore{})
+
+	_, err := service.GetPublicProfile(context.Background(), "Zhangsan")
+	if !errors.Is(err, ErrPublicProfileNotFound) {
+		t.Fatalf("error = %v, want %v", err, ErrPublicProfileNotFound)
 	}
 }

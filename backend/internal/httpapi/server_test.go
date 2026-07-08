@@ -75,6 +75,7 @@ func TestV1RouteContractsReturnNotImplemented(t *testing.T) {
 		{http.MethodPost, "/api/v1/resumes/resume_123/generate-profile"},
 		{http.MethodGet, "/api/v1/profile"},
 		{http.MethodPatch, "/api/v1/profile"},
+		{http.MethodGet, "/api/v1/public/profile"},
 		{http.MethodPost, "/api/v1/profile/sections"},
 		{http.MethodPatch, "/api/v1/profile/sections/section_123"},
 		{http.MethodDelete, "/api/v1/profile/sections/section_123"},

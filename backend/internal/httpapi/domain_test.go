@@ -15,13 +15,16 @@ import (
 )
 
 type domainTestStore struct {
-	slugs     map[string]bool
-	err       error
-	setResult publishing.SetPrimaryDomainResult
-	setErr    error
-	setUserID string
-	setSlug   string
-	setTTL    time.Duration
+	slugs        map[string]bool
+	err          error
+	setResult    publishing.SetPrimaryDomainResult
+	setErr       error
+	setUserID    string
+	setSlug      string
+	setTTL       time.Duration
+	publicResult publishing.PublicProfileResult
+	publicErr    error
+	publicSlug   string
 }
 
 func (s *domainTestStore) SlugExists(_ context.Context, slug string) (bool, error) {
@@ -39,6 +42,160 @@ func (s *domainTestStore) SetPrimaryDomainByUserID(_ context.Context, userID str
 		return publishing.SetPrimaryDomainResult{}, s.setErr
 	}
 	return s.setResult, nil
+}
+
+func (s *domainTestStore) GetPublicProfileBySlug(_ context.Context, slug string, _ time.Time) (publishing.PublicProfileResult, error) {
+	s.publicSlug = slug
+	if s.publicErr != nil {
+		return publishing.PublicProfileResult{}, s.publicErr
+	}
+	return s.publicResult, nil
+}
+
+func TestPublicProfileReturnsPublishedPageFromHost(t *testing.T) {
+	publishedAt := time.Unix(1_700_000_100, 0).UTC()
+	store := &domainTestStore{
+		publicResult: publishing.PublicProfileResult{
+			Page: &publishing.PublicProfilePage{
+				Slug:          "zhangsan",
+				CanonicalSlug: "zhangsan",
+				Visibility:    "public",
+				NoIndex:       false,
+				Profile: publishing.PublicProfile{
+					Headline:    "Backend Engineer",
+					Summary:     "Builds APIs.",
+					TargetRoles: []string{"Go Engineer"},
+					TemplateID:  "default",
+					Theme:       map[string]any{"accent": "blue"},
+					PublishedAt: &publishedAt,
+				},
+				Sections: []publishing.PublicSection{
+					{
+						SectionType: "experience",
+						Content:     map[string]any{"title": "API Platform"},
+						SortOrder:   0,
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(testConfig(), WithPublishingService(publishing.NewService(store)))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/profile", nil)
+	req.Host = "zhangsan.talentpage.test"
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if store.publicSlug != "zhangsan" {
+		t.Fatalf("public slug = %q, want zhangsan", store.publicSlug)
+	}
+	var body publicProfileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Page == nil {
+		t.Fatal("page is nil")
+	}
+	if body.Page.Profile.Headline != "Backend Engineer" {
+		t.Fatalf("headline = %q, want Backend Engineer", body.Page.Profile.Headline)
+	}
+	if body.Page.Sections == nil || len(body.Page.Sections) != 1 {
+		t.Fatalf("sections = %#v, want one public section", body.Page.Sections)
+	}
+	raw := rec.Body.String()
+	for _, privateField := range []string{"user_id", "profile_id", "\"id\"", "is_visible", "is_user_confirmed"} {
+		if strings.Contains(raw, privateField) {
+			t.Fatalf("response contains private field %q: %s", privateField, raw)
+		}
+	}
+}
+
+func TestPublicProfileSupportsSlugQuery(t *testing.T) {
+	store := &domainTestStore{
+		publicResult: publishing.PublicProfileResult{
+			Page: &publishing.PublicProfilePage{Slug: "lisi", CanonicalSlug: "lisi", Visibility: "unlisted", NoIndex: true},
+		},
+	}
+	router := NewRouter(testConfig(), WithPublishingService(publishing.NewService(store)))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/profile?slug=lisi", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if store.publicSlug != "lisi" {
+		t.Fatalf("public slug = %q, want lisi", store.publicSlug)
+	}
+	var body publicProfileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Page == nil || !body.Page.NoIndex {
+		t.Fatalf("page = %#v, want unlisted noindex page", body.Page)
+	}
+}
+
+func TestPublicProfileReturnsRedirectForOldSlug(t *testing.T) {
+	router := NewRouter(
+		testConfig(),
+		WithPublishingService(publishing.NewService(&domainTestStore{
+			publicResult: publishing.PublicProfileResult{
+				Redirect: &publishing.PublicRedirect{Slug: "oldslug", RedirectToSlug: "newslug"},
+			},
+		})),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/profile?slug=oldslug", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body publicProfileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.RedirectToSlug != "newslug" {
+		t.Fatalf("redirect to slug = %q, want newslug", body.RedirectToSlug)
+	}
+	if body.Page != nil {
+		t.Fatalf("page = %#v, want nil for redirect", body.Page)
+	}
+}
+
+func TestPublicProfileReturnsNotFoundForDraftOrMissingSlug(t *testing.T) {
+	router := NewRouter(
+		testConfig(),
+		WithPublishingService(publishing.NewService(&domainTestStore{
+			publicErr: publishing.ErrPublicProfileNotFound,
+		})),
+	)
+
+	for _, path := range []string{"/api/v1/public/profile?slug=draftuser", "/api/v1/public/profile"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+			}
+			var body ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != ErrCodeNotFound {
+				t.Fatalf("error code = %q, want %q", body.Error.Code, ErrCodeNotFound)
+			}
+		})
+	}
 }
 
 func TestDomainCheckReturnsAvailability(t *testing.T) {
