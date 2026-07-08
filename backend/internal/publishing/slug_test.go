@@ -24,7 +24,10 @@ func TestValidateSlug(t *testing.T) {
 		{name: "underscore", slug: "zhang_san", want: ErrSlugInvalidChar},
 		{name: "unicode", slug: "张三", want: ErrSlugInvalidChar},
 		{name: "unicode long enough", slug: "张三abc", want: ErrSlugInvalidChar},
+		{name: "reserved admin", slug: "admin", want: ErrSlugReserved},
 		{name: "reserved api", slug: "api", want: ErrSlugReserved},
+		{name: "reserved login", slug: "login", want: ErrSlugReserved},
+		{name: "reserved static", slug: "static", want: ErrSlugReserved},
 		{name: "reserved www", slug: "www", want: ErrSlugReserved},
 	}
 

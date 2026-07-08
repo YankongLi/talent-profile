@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHandler *profileHandler) {
+func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHandler *profileHandler, domainHandler *domainHandler) {
 	if authHandler != nil {
 		v1.POST("/auth/email-code", authHandler.requestEmailCode)
 		v1.POST("/auth/verify", authHandler.verify)
@@ -44,7 +44,11 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 
 	v1.POST("/profile/sections/:id/rewrite", notImplementedHandler("profile section rewrite is not implemented"))
 
-	v1.GET("/domains/check", notImplementedHandler("domain availability check is not implemented"))
+	if domainHandler != nil {
+		v1.GET("/domains/check", domainHandler.check)
+	} else {
+		v1.GET("/domains/check", notImplementedHandler("domain availability check is not implemented"))
+	}
 	v1.PUT("/profile/domain", notImplementedHandler("profile domain update is not implemented"))
 	v1.POST("/profile/publish", notImplementedHandler("profile publishing is not implemented"))
 	v1.POST("/profile/unpublish", notImplementedHandler("profile unpublishing is not implemented"))

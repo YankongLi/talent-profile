@@ -8,6 +8,7 @@ import (
 	"github.com/YankongLi/talent-profile/backend/internal/auth"
 	"github.com/YankongLi/talent-profile/backend/internal/config"
 	profiledomain "github.com/YankongLi/talent-profile/backend/internal/profile"
+	"github.com/YankongLi/talent-profile/backend/internal/publishing"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,6 +18,7 @@ type routerOptions struct {
 	db             *sql.DB
 	authService    *auth.Service
 	profileService *profiledomain.Service
+	publishService *publishing.Service
 	logger         *slog.Logger
 }
 
@@ -35,6 +37,12 @@ func WithAuthService(service *auth.Service) RouterOption {
 func WithProfileService(service *profiledomain.Service) RouterOption {
 	return func(opts *routerOptions) {
 		opts.profileService = service
+	}
+}
+
+func WithPublishingService(service *publishing.Service) RouterOption {
+	return func(opts *routerOptions) {
+		opts.publishService = service
 	}
 }
 
@@ -83,6 +91,10 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 	if profileService == nil && opts.db != nil {
 		profileService = profiledomain.NewService(profiledomain.NewPostgresStore(opts.db))
 	}
+	publishService := opts.publishService
+	if publishService == nil && opts.db != nil {
+		publishService = publishing.NewService(publishing.NewPostgresStore(opts.db))
+	}
 
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
@@ -106,7 +118,12 @@ func NewRouter(cfg config.Config, options ...RouterOption) *gin.Engine {
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", healthHandler(cfg.AppName, cfg.Env))
-	registerV1Routes(v1, newAuthHandler(cfg, authService), newProfileHandler(cfg, authService, profileService))
+	registerV1Routes(
+		v1,
+		newAuthHandler(cfg, authService),
+		newProfileHandler(cfg, authService, profileService),
+		newDomainHandler(publishService),
+	)
 
 	return router
 }
