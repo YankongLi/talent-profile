@@ -3,6 +3,8 @@ package resume
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"time"
 )
 
 type PostgresStore struct {
@@ -14,8 +16,7 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 }
 
 func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Resume, error) {
-	var resume Resume
-	err := s.db.QueryRowContext(ctx, `
+	return scanResume(s.db.QueryRowContext(ctx, `
 		INSERT INTO resumes (
 			user_id, storage_key, original_filename, mime_type, file_size, content_hash, parse_status
 		)
@@ -29,7 +30,48 @@ func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Resume, 
 		input.FileSize,
 		input.ContentHash,
 		input.ParseStatus,
-	).Scan(
+	))
+}
+
+func (s *PostgresStore) GetByUserID(ctx context.Context, userID string, resumeID string) (Resume, error) {
+	return scanResume(s.db.QueryRowContext(ctx, `
+		SELECT id::text, user_id::text, storage_key, original_filename, mime_type,
+			file_size, content_hash, parse_status, COALESCE(parse_error, ''), created_at
+		FROM resumes
+		WHERE id = $1
+			AND user_id = $2
+			AND deleted_at IS NULL
+	`, resumeID, userID))
+}
+
+func (s *PostgresStore) SoftDeleteByUserID(ctx context.Context, userID string, resumeID string, deletedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE resumes
+		SET deleted_at = $3
+		WHERE id = $1
+			AND user_id = $2
+			AND deleted_at IS NULL
+	`, resumeID, userID, deletedAt)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+type resumeScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanResume(row resumeScanner) (Resume, error) {
+	var resume Resume
+	err := row.Scan(
 		&resume.ID,
 		&resume.UserID,
 		&resume.StorageKey,
@@ -41,6 +83,9 @@ func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Resume, 
 		&resume.ParseError,
 		&resume.CreatedAt,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Resume{}, ErrNotFound
+	}
 	if err != nil {
 		return Resume{}, err
 	}

@@ -17,6 +17,8 @@ import (
 type resumeTestStore struct {
 	createInput CreateInput
 	createErr   error
+	resume      Resume
+	deletedID   string
 }
 
 func (s *resumeTestStore) Create(_ context.Context, input CreateInput) (Resume, error) {
@@ -35,6 +37,21 @@ func (s *resumeTestStore) Create(_ context.Context, input CreateInput) (Resume, 
 		ParseStatus:      input.ParseStatus,
 		CreatedAt:        time.Unix(1_700_000_000, 0).UTC(),
 	}, nil
+}
+
+func (s *resumeTestStore) GetByUserID(_ context.Context, userID string, resumeID string) (Resume, error) {
+	if s.resume.ID == "" || s.resume.ID != resumeID || s.resume.UserID != userID {
+		return Resume{}, ErrNotFound
+	}
+	return s.resume, nil
+}
+
+func (s *resumeTestStore) SoftDeleteByUserID(_ context.Context, userID string, resumeID string, _ time.Time) error {
+	if s.resume.ID == "" || s.resume.ID != resumeID || s.resume.UserID != userID {
+		return ErrNotFound
+	}
+	s.deletedID = resumeID
+	return nil
 }
 
 type resumeTestObjects struct {
@@ -201,6 +218,54 @@ func TestServiceUploadDeletesObjectWhenCreateFails(t *testing.T) {
 	}
 	if objects.deletedKey != store.createInput.StorageKey {
 		t.Fatalf("deleted key = %q, want %q", objects.deletedKey, store.createInput.StorageKey)
+	}
+}
+
+func TestServiceStatus(t *testing.T) {
+	store := &resumeTestStore{
+		resume: Resume{
+			ID:               "resume_1",
+			UserID:           "user_1",
+			OriginalFilename: "resume.pdf",
+			MimeType:         MimePDF,
+			FileSize:         12,
+			ParseStatus:      StatusFailed,
+			ParseError:       "parse failed",
+		},
+	}
+	service := NewService(store, &resumeTestObjects{})
+
+	resume, err := service.Status(context.Background(), "user_1", "resume_1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if resume.ParseStatus != StatusFailed {
+		t.Fatalf("ParseStatus = %q, want %q", resume.ParseStatus, StatusFailed)
+	}
+	if resume.ParseError != "parse failed" {
+		t.Fatalf("ParseError = %q", resume.ParseError)
+	}
+}
+
+func TestServiceDeleteRemovesObjectThenSoftDeletes(t *testing.T) {
+	store := &resumeTestStore{
+		resume: Resume{
+			ID:         "resume_1",
+			UserID:     "user_1",
+			StorageKey: "resumes/user_1/random.pdf",
+		},
+	}
+	objects := &resumeTestObjects{}
+	service := NewService(store, objects)
+
+	if err := service.Delete(context.Background(), "user_1", "resume_1"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if objects.deletedKey != "resumes/user_1/random.pdf" {
+		t.Fatalf("deleted key = %q", objects.deletedKey)
+	}
+	if store.deletedID != "resume_1" {
+		t.Fatalf("deleted id = %q", store.deletedID)
 	}
 }
 

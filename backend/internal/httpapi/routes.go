@@ -43,11 +43,13 @@ func registerV1Routes(v1 *gin.RouterGroup, authHandler *authHandler, profileHand
 
 	if resumeHandler != nil {
 		v1.POST("/resumes", resumeHandler.upload)
+		v1.GET("/resumes/:id/status", resumeHandler.status)
+		v1.DELETE("/resumes/:id", resumeHandler.delete)
 	} else {
 		v1.POST("/resumes", notImplementedHandler("resume upload is not implemented"))
+		v1.GET("/resumes/:id/status", notImplementedHandler("resume status is not implemented"))
+		v1.DELETE("/resumes/:id", notImplementedHandler("resume deletion is not implemented"))
 	}
-	v1.GET("/resumes/:id/status", notImplementedHandler("resume status is not implemented"))
-	v1.DELETE("/resumes/:id", notImplementedHandler("resume deletion is not implemented"))
 	v1.POST("/resumes/:id/generate-profile", notImplementedHandler("profile generation is not implemented"))
 
 	v1.POST("/profile/sections/:id/rewrite", notImplementedHandler("profile section rewrite is not implemented"))

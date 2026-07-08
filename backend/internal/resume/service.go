@@ -36,10 +36,14 @@ var (
 	ErrUnsupportedFileType = errors.New("unsupported resume file type")
 	ErrInvalidFileHeader   = errors.New("invalid resume file header")
 	ErrInvalidUserID       = errors.New("invalid user id")
+	ErrInvalidResumeID     = errors.New("invalid resume id")
+	ErrNotFound            = errors.New("resume not found")
 )
 
 type Store interface {
 	Create(ctx context.Context, input CreateInput) (Resume, error)
+	GetByUserID(ctx context.Context, userID string, resumeID string) (Resume, error)
+	SoftDeleteByUserID(ctx context.Context, userID string, resumeID string, deletedAt time.Time) error
 }
 
 type Service struct {
@@ -78,6 +82,28 @@ type CreateInput struct {
 
 func NewService(store Store, objects storage.Client) *Service {
 	return &Service{store: store, objects: objects}
+}
+
+func (s *Service) Status(ctx context.Context, userID string, resumeID string) (Resume, error) {
+	if strings.TrimSpace(userID) == "" {
+		return Resume{}, ErrInvalidUserID
+	}
+	if strings.TrimSpace(resumeID) == "" {
+		return Resume{}, ErrInvalidResumeID
+	}
+	return s.store.GetByUserID(ctx, userID, resumeID)
+}
+
+func (s *Service) Delete(ctx context.Context, userID string, resumeID string) error {
+	resume, err := s.Status(ctx, userID, resumeID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.objects.Delete(ctx, resume.StorageKey); err != nil {
+		return fmt.Errorf("delete resume object: %w", err)
+	}
+	return s.store.SoftDeleteByUserID(ctx, userID, resumeID, time.Now().UTC())
 }
 
 func (s *Service) Upload(ctx context.Context, userID string, input UploadInput) (Resume, error) {

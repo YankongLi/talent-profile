@@ -20,11 +20,13 @@ import (
 
 type resumeHTTPTestStore struct {
 	createInput resumedomain.CreateInput
+	resumes     map[string]resumedomain.Resume
+	deletedID   string
 }
 
 func (s *resumeHTTPTestStore) Create(_ context.Context, input resumedomain.CreateInput) (resumedomain.Resume, error) {
 	s.createInput = input
-	return resumedomain.Resume{
+	resume := resumedomain.Resume{
 		ID:               "resume_1",
 		UserID:           input.UserID,
 		StorageKey:       input.StorageKey,
@@ -34,11 +36,35 @@ func (s *resumeHTTPTestStore) Create(_ context.Context, input resumedomain.Creat
 		ContentHash:      input.ContentHash,
 		ParseStatus:      input.ParseStatus,
 		CreatedAt:        time.Unix(1_700_000_000, 0).UTC(),
-	}, nil
+	}
+	if s.resumes == nil {
+		s.resumes = make(map[string]resumedomain.Resume)
+	}
+	s.resumes[resume.ID] = resume
+	return resume, nil
+}
+
+func (s *resumeHTTPTestStore) GetByUserID(_ context.Context, userID string, resumeID string) (resumedomain.Resume, error) {
+	resume, ok := s.resumes[resumeID]
+	if !ok || resume.UserID != userID {
+		return resumedomain.Resume{}, resumedomain.ErrNotFound
+	}
+	return resume, nil
+}
+
+func (s *resumeHTTPTestStore) SoftDeleteByUserID(_ context.Context, userID string, resumeID string, _ time.Time) error {
+	resume, ok := s.resumes[resumeID]
+	if !ok || resume.UserID != userID {
+		return resumedomain.ErrNotFound
+	}
+	s.deletedID = resumeID
+	delete(s.resumes, resumeID)
+	return nil
 }
 
 type resumeHTTPTestObjects struct {
 	putInput storage.PutObjectInput
+	deleted  string
 }
 
 func (s *resumeHTTPTestObjects) Put(_ context.Context, input storage.PutObjectInput) (storage.ObjectInfo, error) {
@@ -53,7 +79,8 @@ func (s *resumeHTTPTestObjects) PresignedGetURL(_ context.Context, _ string, _ t
 	return nil, nil
 }
 
-func (s *resumeHTTPTestObjects) Delete(_ context.Context, _ string) error {
+func (s *resumeHTTPTestObjects) Delete(_ context.Context, key string) error {
+	s.deleted = key
 	return nil
 }
 
@@ -120,6 +147,92 @@ func TestResumeUploadRequiresAuth(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestResumeStatus(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	token := loginProfileTestUser(t, authService, "user@example.com")
+	userID := authStore.users["user@example.com"].ID
+
+	resumeStore := &resumeHTTPTestStore{
+		resumes: map[string]resumedomain.Resume{
+			"resume_1": {
+				ID:               "resume_1",
+				UserID:           userID,
+				OriginalFilename: "resume.pdf",
+				MimeType:         resumedomain.MimePDF,
+				FileSize:         10,
+				ParseStatus:      resumedomain.StatusFailed,
+				ParseError:       "unsupported embedded image",
+			},
+		},
+	}
+	router := NewRouter(
+		testConfig(),
+		WithAuthService(authService),
+		WithResumeService(resumedomain.NewService(resumeStore, &resumeHTTPTestObjects{})),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resumes/resume_1/status", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response resumeStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ParseStatus != resumedomain.StatusFailed {
+		t.Fatalf("parse status = %q", response.ParseStatus)
+	}
+	if response.ParseError == "" {
+		t.Fatal("parse error is empty")
+	}
+	if strings.Contains(rec.Body.String(), "storage_key") {
+		t.Fatalf("response leaked storage key: %s", rec.Body.String())
+	}
+}
+
+func TestResumeDelete(t *testing.T) {
+	authStore := newAuthTestStore()
+	authService := newProfileTestAuthService(authStore)
+	token := loginProfileTestUser(t, authService, "user@example.com")
+	userID := authStore.users["user@example.com"].ID
+
+	resumeStore := &resumeHTTPTestStore{
+		resumes: map[string]resumedomain.Resume{
+			"resume_1": {
+				ID:         "resume_1",
+				UserID:     userID,
+				StorageKey: "resumes/" + userID + "/random.pdf",
+			},
+		},
+	}
+	objects := &resumeHTTPTestObjects{}
+	router := NewRouter(
+		testConfig(),
+		WithAuthService(authService),
+		WithResumeService(resumedomain.NewService(resumeStore, objects)),
+	)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/resumes/resume_1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if resumeStore.deletedID != "resume_1" {
+		t.Fatalf("deleted id = %q", resumeStore.deletedID)
+	}
+	if objects.deleted != "resumes/"+userID+"/random.pdf" {
+		t.Fatalf("deleted object = %q", objects.deleted)
 	}
 }
 

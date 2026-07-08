@@ -20,6 +20,15 @@ type resumeResponse struct {
 	Resume resumedomain.Resume `json:"resume"`
 }
 
+type resumeStatusResponse struct {
+	ID               string `json:"id"`
+	OriginalFilename string `json:"original_filename"`
+	MimeType         string `json:"mime_type"`
+	FileSize         int64  `json:"file_size"`
+	ParseStatus      string `json:"parse_status"`
+	ParseError       string `json:"parse_error,omitempty"`
+}
+
 func newResumeHandler(cfg config.Config, authService *authdomain.Service, resumeService *resumedomain.Service) *resumeHandler {
 	if authService == nil || resumeService == nil {
 		return nil
@@ -64,6 +73,42 @@ func (h *resumeHandler) upload(c *gin.Context) {
 	c.JSON(http.StatusCreated, resumeResponse{Resume: resume})
 }
 
+func (h *resumeHandler) status(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	resume, err := h.resumeService.Status(c.Request.Context(), user.ID, c.Param("id"))
+	if err != nil {
+		h.abortResumeError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, resumeStatusResponse{
+		ID:               resume.ID,
+		OriginalFilename: resume.OriginalFilename,
+		MimeType:         resume.MimeType,
+		FileSize:         resume.FileSize,
+		ParseStatus:      resume.ParseStatus,
+		ParseError:       resume.ParseError,
+	})
+}
+
+func (h *resumeHandler) delete(c *gin.Context) {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+
+	if err := h.resumeService.Delete(c.Request.Context(), user.ID, c.Param("id")); err != nil {
+		h.abortResumeError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, okResponse{OK: true})
+}
+
 func (h *resumeHandler) currentUser(c *gin.Context) (authdomain.User, bool) {
 	token := sessionToken(c, h.cfg.Auth.CookieName)
 	if token == "" {
@@ -90,6 +135,10 @@ func (h *resumeHandler) abortResumeError(c *gin.Context, err error) {
 		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "resume file must be a valid PDF or DOCX")
 	case errors.Is(err, resumedomain.ErrInvalidUserID):
 		AbortWithError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "unauthorized")
+	case errors.Is(err, resumedomain.ErrInvalidResumeID):
+		AbortWithError(c, http.StatusBadRequest, ErrCodeBadRequest, "invalid resume id")
+	case errors.Is(err, resumedomain.ErrNotFound):
+		AbortWithError(c, http.StatusNotFound, ErrCodeNotFound, "resume not found")
 	default:
 		AbortWithError(c, http.StatusInternalServerError, ErrCodeInternal, "internal server error")
 	}
